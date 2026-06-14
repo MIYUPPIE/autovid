@@ -13,7 +13,10 @@ import { orientationFor, scoreCandidate } from '../src/stock.js';
 import { parseJsonLoose, splitScriptIntoScenes } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
-import { buildProportionalSrt } from '../src/voice.js';
+import { buildProportionalSrt, chunkForYarn } from '../src/voice.js';
+import {
+  wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
+} from '../src/captions.js';
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
 import { app } from '../src/server.js';
 
@@ -37,12 +40,16 @@ test('voices: every id is unique and non-empty', () => {
   assert.ok(VOICES.native.length > 0 && VOICES.africa.length > 0 && VOICES.global.length > 0);
 });
 
-test('voices: native group carries engine + script language; MMS voices have a lang code', () => {
-  const yor = getVoice('mms-yor');
+test('voices: native group carries engine + script language; YarnGPT voices have a speaker', () => {
+  const yor = getVoice('yarn-yor-f');
   assert.ok(yor);
-  assert.equal(yor.engine, 'mms');
-  assert.equal(yor.mmsLang, 'yor');
+  assert.equal(yor.engine, 'yarn');
+  assert.equal(yor.yarnVoice, 'Idera');
   assert.equal(yor.lang, 'Yoruba');
+  // Every native YarnGPT voice names a speaker and one of the three languages.
+  const yarn = VOICES.native.filter((v) => v.engine === 'yarn');
+  assert.equal(yarn.length, 6);
+  assert.ok(yarn.every((v) => v.yarnVoice && ['Yoruba', 'Igbo', 'Hausa'].includes(v.lang)));
   const swahili = getVoice('sw-KE-ZuriNeural');
   assert.equal(swahili.engine, 'edge');
   assert.equal(swahili.lang, 'Swahili');
@@ -228,6 +235,96 @@ test('subtitles: proportional SRT has one cue per sentence within the duration',
   assert.equal(cues.length, 3);
   assert.match(txt, /00:00:00,000 --> /); // starts at zero
   assert.ok(!/00:00:(09|1[0-9])/.test(txt) || /00:00:09,000/.test(txt), 'cues stay within duration');
+});
+
+// ---------- karaoke captions (the "one giant caption block" fix) ----------
+test('captions: proportional word timing covers the whole audio, in order, no overlap', () => {
+  const words = wordsFromTextProportional('Báwo ni ọ̀rẹ́ mi. Ẹ kú àárọ̀ o.', 8);
+  assert.ok(words.length >= 6, 'every word becomes a cue');
+  assert.equal(words[0].start, 0);
+  assert.ok(Math.abs(words[words.length - 1].end - 8) < 1e-6, 'last word ends at audio end');
+  for (let i = 0; i < words.length; i++) {
+    assert.ok(words[i].end > words[i].start, 'each word has positive duration');
+    if (i > 0) assert.ok(words[i].start >= words[i - 1].end - 1e-9, 'words never overlap');
+  }
+});
+
+test('captions: empty / zero-duration inputs produce no words (never crash)', () => {
+  assert.deepEqual(wordsFromTextProportional('', 5), []);
+  assert.deepEqual(wordsFromTextProportional('hi', 0), []);
+});
+
+test('captions: word weight grows with syllables and punctuation adds a pause', () => {
+  assert.ok(wordWeight('banana') > wordWeight('cat'), 'more vowel groups = longer');
+  assert.ok(wordWeight('end.') > wordWeight('end'), 'full stop adds a breath');
+  assert.ok(wordWeight('!!!') >= 1, 'pure punctuation still floors at 1');
+});
+
+test('captions: cue-based timing keeps each word inside its own cue window', () => {
+  const cues = [{ start: 0, end: 2, text: 'one two' }, { start: 3, end: 5, text: 'three four five' }];
+  const words = wordsFromCues(cues);
+  assert.equal(words.length, 5);
+  assert.ok(words[0].start >= 0 && words[1].end <= 2 + 1e-9, 'first cue words stay in [0,2]');
+  assert.ok(words[2].start >= 3 - 1e-9 && words[4].end <= 5 + 1e-9, 'second cue words stay in [3,5]');
+});
+
+test('captions: lines break on length and on sentence end', () => {
+  const words = wordsFromTextProportional('a b c d e f g h. i j', 10);
+  const lines = groupIntoLines(words, { maxWords: 4, maxChars: 100 });
+  assert.ok(lines.every((l) => l.length <= 4), 'never exceeds max words per line');
+  // The word ending in "." must be the last token of its line.
+  const dotLine = lines.find((l) => l.some((w) => w.text.endsWith('.')));
+  assert.ok(dotLine[dotLine.length - 1].text.endsWith('.'), 'sentence end closes the line');
+});
+
+test('captions: parseSrt is the inverse of edge-style cues', () => {
+  const srt = '1\n00:00:00,000 --> 00:00:02,500\nHello there\n\n2\n00:00:02,500 --> 00:00:04,000\nWorld\n';
+  const cues = parseSrt(srt);
+  assert.equal(cues.length, 2);
+  assert.equal(cues[0].text, 'Hello there');
+  assert.equal(cues[0].start, 0);
+  assert.equal(cues[0].end, 2.5);
+  assert.equal(cues[1].end, 4);
+});
+
+test('captions: buildKaraokeAss writes a valid ASS with \\k tags and every word', () => {
+  const assPath = path.join(os.tmpdir(), `av_${Date.now()}.ass`);
+  const out = buildKaraokeAss({ text: 'Ndi Igbo kwenu. Daalu.', duration: 6, aspect: '9:16', assPath });
+  assert.equal(out, assPath);
+  const ass = fs.readFileSync(assPath, 'utf8');
+  fs.unlinkSync(assPath);
+  assert.match(ass, /\[Events\]/);
+  assert.match(ass, /PlayResX: 1080/); // sized to the 9:16 frame
+  assert.match(ass, /Dialogue: /);
+  assert.match(ass, /\{\\k\d+\}/, 'uses karaoke timing tags');
+  for (const w of ['Ndi', 'Igbo', 'kwenu.', 'Daalu.']) assert.ok(ass.includes(w), `keeps word ${w}`);
+});
+
+test('captions: nothing to show → null (no file, no crash)', () => {
+  const assPath = path.join(os.tmpdir(), `av_empty_${Date.now()}.ass`);
+  assert.equal(buildKaraokeAss({ text: '', duration: 5, assPath }), null);
+  assert.equal(fs.existsSync(assPath), false);
+});
+
+// ---------- YarnGPT request chunking (2000-char cap) ----------
+test('yarn: short text is a single chunk; nothing added or lost', () => {
+  const t = 'Ẹ kú àárọ̀, ará mi.';
+  assert.deepEqual(chunkForYarn(t, 1800), [t]);
+});
+
+test('yarn: long text splits under the cap on sentence boundaries, losing no words', () => {
+  const sentence = 'Eyi ni gbolohun kan to gun die die. ';
+  const text = sentence.repeat(120); // well over 1800 chars
+  const chunks = chunkForYarn(text, 200);
+  assert.ok(chunks.length > 1, 'splits into multiple requests');
+  assert.ok(chunks.every((c) => c.length <= 200), 'every chunk respects the cap');
+  const rejoinWords = chunks.join(' ').split(/\s+/).filter(Boolean).length;
+  const srcWords = text.split(/\s+/).filter(Boolean).length;
+  assert.equal(rejoinWords, srcWords, 'no words dropped across the split');
+});
+
+test('yarn: empty text yields no chunks', () => {
+  assert.deepEqual(chunkForYarn('   ', 1800), []);
 });
 
 // ---------- footage resilience (the "aborted download killed the render" bug) ----------

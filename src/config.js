@@ -24,14 +24,17 @@ export const config = {
   claudeBin: process.env.CLAUDE_BIN || 'claude',
   port: parseInt(process.env.PORT || '3000', 10),
   ttsEngine: process.env.TTS_ENGINE || 'edge-tts',
+
+  // YarnGPT — hosted Nigerian-language TTS for Yoruba / Igbo / Hausa.
+  yarnKey: process.env.YARN_API_KEY || '',
+  yarnBase: process.env.YARN_BASE || 'https://yarngpt.ai/api/v1',
+  // Max characters per YarnGPT request (their hard cap is 2000; stay under it).
+  yarnMaxChars: parseInt(process.env.YARN_MAX_CHARS || '1800', 10),
   maxClips: parseInt(process.env.MAX_CLIPS || '12', 10),
   downloadTimeout: parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000', 10),
   // Skip clips bigger than this — we only use a few seconds, so a 75MB source is
   // pure download tax. Abort and try the next candidate instead.
   maxClipMb: parseInt(process.env.MAX_CLIP_MB || '35', 10),
-
-  // Python interpreter that has torch + transformers for the local MMS TTS model.
-  mmsPython: process.env.MMS_PYTHON || `${process.env.HOME}/anaconda3/envs/tf_gpu/bin/python`,
 
   // ffmpeg encoder. 'auto' uses h264_nvenc when present (RTX GPU), else libx264 veryfast.
   encoder: process.env.VIDEO_ENCODER || 'auto',

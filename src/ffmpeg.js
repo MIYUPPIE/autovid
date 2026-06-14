@@ -126,8 +126,16 @@ export async function assembleVoiceTrack({ lines, outBase }) {
   return { path: out, duration, cues };
 }
 
-function subtitleFilter(srt, h) {
-  const escaped = srt.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+// Escape a path for use inside an ffmpeg lavfi filter argument.
+function escapeFilterPath(p) {
+  return p.replace(/\\/g, '/').replace(/:/g, '\\:').replace(/'/g, "\\'");
+}
+
+// Burn captions. ASS files (karaoke, fully self-styled) use the `ass` filter;
+// plain SRT falls back to `subtitles` with a readable default style.
+function captionFilter(file, h) {
+  const escaped = escapeFilterPath(file);
+  if (/\.ass$/i.test(file)) return `ass='${escaped}'`;
   const style =
     'FontName=DejaVu Sans,FontSize=18,PrimaryColour=&H00FFFFFF,' +
     'OutlineColour=&H80000000,BorderStyle=1,Outline=2,Shadow=0,' +
@@ -140,7 +148,7 @@ function subtitleFilter(srt, h) {
  * mix ducked background music, burn subtitles, add fades. Returns final mp4.
  */
 export async function finalizeVideo({
-  silentVideo, voiceAudio, srt = null, bgMusic = null, musicVolume = 0.12,
+  silentVideo, voiceAudio, captions = null, bgMusic = null, musicVolume = 0.12,
   aspect, fades = true, outName,
 }) {
   const { h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
@@ -149,7 +157,7 @@ export async function finalizeVideo({
 
   const inputs = ['-i', silentVideo, '-i', voiceAudio];
   const vChain = [];
-  if (srt && fs.existsSync(srt)) vChain.push(subtitleFilter(srt, h));
+  if (captions && fs.existsSync(captions)) vChain.push(captionFilter(captions, h));
   if (fades) {
     vChain.push('fade=t=in:st=0:d=0.6', `fade=t=out:st=${Math.max(0, dur - 0.6).toFixed(2)}:d=0.6`);
   }

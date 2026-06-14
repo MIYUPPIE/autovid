@@ -1,6 +1,6 @@
 # AutoVid — AI Video Pipeline
 
-AI writes the script and scene plan **in your chosen language** → free stock footage is pulled from **Pexels + Pixabay** → a free neural voiceover is generated as **one continuous narration** (Edge-TTS for English/African languages, local **Meta MMS-TTS on the GPU** for Yoruba/Igbo/Hausa) → royalty-free **background music auto-picked from Jamendo** by mood → **FFmpeg** fits footage to the narration with **Ken Burns motion**, burns subtitles, ducks the music, and renders a final MP4 on the **GPU (NVENC)**. Driven from a web UI.
+AI writes the script and scene plan **in your chosen language** → free stock footage is pulled from **Pexels + Pixabay** → a neural voiceover is generated as **one continuous narration** (Edge-TTS for English/African languages, **YarnGPT** for Yoruba/Igbo/Hausa) → royalty-free **background music auto-picked from Jamendo** by mood → **FFmpeg** fits footage to the narration with **Ken Burns motion**, burns **word-by-word karaoke captions**, ducks the music, and renders a final MP4 on the **GPU (NVENC)**. Driven from a web UI.
 
 ## What you control per video
 - **Input mode**:
@@ -11,10 +11,10 @@ AI writes the script and scene plan **in your chosen language** → free stock f
 - **Format**: 16:9, 9:16, or 1:1
 - **Length**: 15–180s
 - **Language / voice**:
-  - **Native languages** — Yorùbá, Igbo, Hausa (local neural MMS-TTS), plus Swahili, Zulu, Amharic, Afrikaans, Somali (Edge neural). Grok writes the whole script natively in that language; stock queries stay English.
+  - **Native languages** — Yorùbá, Igbo, Hausa (YarnGPT, male/female speakers), plus Swahili, Zulu, Amharic, Afrikaans, Somali (Edge neural). Grok writes the whole script natively in that language; stock queries stay English.
   - **African-accented English** (Nigerian, Kenyan, South African, Tanzanian) and **Global** (US/UK/AU/IN).
-  - **Bilingual** — turn on the bilingual toggle and pick a second voice/language: every line is spoken first in language A, then in language B (e.g. Yorùbá then English), with subtitles exactly timed to each read.
-- **Subtitles**: on/off (burned-in; word-timed for Edge voices, sentence-timed for MMS)
+  - **Bilingual** — turn on the bilingual toggle and pick a second voice/language: every line is spoken first in language A, then in language B (e.g. Yorùbá then English), with captions timed to each read.
+- **Captions**: on/off (burned-in, **word-by-word karaoke** — each word lights up as it is spoken; timed from the edge SRT when available, otherwise distributed across the real audio duration by syllable weight)
 - **Motion (Ken Burns)**: on/off — slow zoom/pan on each clip so static footage feels alive
 - **Background music**: on/off — **Auto** (royalty-free from Jamendo, mood-matched to tone) or **Upload**; auto-looped and ducked under the voice
 - **Fades**: on/off
@@ -30,7 +30,7 @@ One continuous voiceover is synthesized for the whole video (not sentence-by-sen
   pip install edge-tts          # or: pipx install edge-tts
   ```
   Verify: `edge-tts --list-voices | head`
-- **Native-language TTS (Yoruba/Igbo/Hausa)** — a Python env with `torch` + `transformers` + `scipy` on a CUDA GPU. Point `MMS_PYTHON` at it (defaults to the `tf_gpu` conda env). The MMS model (~145MB per language) downloads once on first use and is cached.
+- **Native-language TTS (Yoruba/Igbo/Hausa)** — a [YarnGPT](https://yarngpt.ai) API key in `YARN_API_KEY`. No local GPU/model needed; the request is hosted. Verify: `npm run eval:yarn`.
 - **Auto music** — a free Jamendo client id in `JAMENDO_CLIENT_ID` (see API keys).
 
 ## Setup
@@ -62,14 +62,16 @@ The active provider shows in `/api/health` and the UI header.
 - `PEXELS_API_KEY` — from https://www.pexels.com/api
 - `PIXABAY_API_KEY` — from https://pixabay.com/api/docs
 - `JAMENDO_CLIENT_ID` — from https://devportal.jamendo.com (free, ~2-min signup) — enables auto background music. Without it, auto-music is skipped (upload still works).
+- `YARN_API_KEY` — from https://yarngpt.ai — enables the Yoruba/Igbo/Hausa voices. Only needed if you use those languages.
 
 ## How it fits together
 ```
  Topic ─► xai.js (Grok) ─► scene plan {narration (in language), query (English), duration}
             │
-            ├─► voice.js  ─► ONE continuous narration audio + SRT
+            ├─► voice.js  ─► ONE continuous narration audio (+ timing)
             │     edge-tts (English / Swahili / Zulu / …)  → mp3 + word-timed SRT
-            │     mms_tts.py on GPU (Yoruba / Igbo / Hausa) → wav→mp3 + proportional SRT
+            │     YarnGPT  (Yoruba / Igbo / Hausa)         → mp3 (duration only)
+            │   captions.js ─► word-by-word karaoke .ass (from SRT or audio duration)
             │
             ├─► stock.js (Pexels/Pixabay) ─► per-scene clip, ranked + size-capped, resilient
             ├─► music.js  (Jamendo) ─► mood-matched royalty-free track

@@ -1,0 +1,195 @@
+// Karaoke caption engine.
+//
+// Engines like YarnGPT (Yoruba/Igbo/Hausa) and edge return no per-word
+// timestamps, so we derive them: each word gets a slice of the real audio
+// duration proportional to how long it takes to say (syllable estimate, plus a
+// pause after punctuation). Those word windows are rendered as ASS karaoke
+// (`{\k}` tags) so each word lights up as it is spoken — multiple short cues,
+// word by word, instead of one sentence sitting on screen the whole clip.
+//
+// Two timing sources:
+//   wordsFromTextProportional(text, duration) — when we only know the total
+//     audio length (YarnGPT). Distributes the whole narration across [0,dur].
+//   wordsFromCues(cues)                        — when each line's window is
+//     known (edge SRT, or bilingual per-line cues). Distributes within a cue.
+
+import fs from 'fs';
+import { RESOLUTIONS } from './config.js';
+
+// ---- word timing --------------------------------------------------------
+
+// Split into spoken tokens, keeping trailing punctuation attached to its word.
+export function splitWords(text) {
+  return (text || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean);
+}
+
+// Rough spoken length of a token: number of syllables (vowel groups, tone marks
+// folded away) plus a pause weight for trailing punctuation. Never below 1 so
+// every word occupies a real slice of time.
+export function wordWeight(word) {
+  const folded = word
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '') // drop combining tone marks
+    .toLowerCase();
+  const vowelGroups = (folded.match(/[aeiou]+/g) || []).length;
+  let w = Math.max(1, vowelGroups);
+  if (/[,;:]$/.test(word)) w += 0.6; // short breath
+  if (/[.!?…]$/.test(word)) w += 1.2; // full stop
+  return w;
+}
+
+// Build word windows spanning [0, duration], proportional to spoken length.
+// Returns [{ text, start, end }] with strictly non-overlapping, ordered times.
+export function wordsFromTextProportional(text, duration) {
+  const tokens = splitWords(text);
+  if (tokens.length === 0 || !(duration > 0)) return [];
+  const weights = tokens.map(wordWeight);
+  const total = weights.reduce((a, b) => a + b, 0) || 1;
+  const out = [];
+  let acc = 0;
+  for (let i = 0; i < tokens.length; i++) {
+    const start = (acc / total) * duration;
+    acc += weights[i];
+    const end = (acc / total) * duration;
+    out.push({ text: tokens[i], start, end });
+  }
+  return out;
+}
+
+// Distribute each cue's window across its own words. `cues` = [{start,end,text}]
+// in seconds. Lets edge / bilingual reuse the engine's real line timing while
+// still highlighting word by word.
+export function wordsFromCues(cues) {
+  const out = [];
+  for (const c of cues) {
+    const span = Math.max(0, (c.end ?? 0) - (c.start ?? 0));
+    const tokens = splitWords(c.text);
+    if (tokens.length === 0 || span <= 0) continue;
+    const weights = tokens.map(wordWeight);
+    const total = weights.reduce((a, b) => a + b, 0) || 1;
+    let acc = 0;
+    for (let i = 0; i < tokens.length; i++) {
+      const start = c.start + (acc / total) * span;
+      acc += weights[i];
+      const end = c.start + (acc / total) * span;
+      out.push({ text: tokens[i], start, end });
+    }
+  }
+  return out;
+}
+
+// ---- SRT parsing (to reuse edge's real timings) -------------------------
+
+function srtTimeToSec(t) {
+  const m = /(\d+):(\d+):(\d+)[,.](\d+)/.exec(t.trim());
+  if (!m) return 0;
+  return (+m[1]) * 3600 + (+m[2]) * 60 + (+m[3]) + (+m[4]) / 1000;
+}
+
+export function parseSrt(content) {
+  const cues = [];
+  const blocks = content.replace(/\r/g, '').trim().split(/\n\n+/);
+  for (const b of blocks) {
+    const lines = b.split('\n');
+    const tl = lines.find((l) => l.includes('-->'));
+    if (!tl) continue;
+    const [a, z] = tl.split('-->');
+    const text = lines.slice(lines.indexOf(tl) + 1).join(' ').trim();
+    if (!text) continue;
+    cues.push({ start: srtTimeToSec(a), end: srtTimeToSec(z), text });
+  }
+  return cues;
+}
+
+// ---- line grouping ------------------------------------------------------
+
+// Greedily pack words into short readable lines. Breaks on a hard limit or
+// right after sentence-ending punctuation so a line is never a run-on.
+export function groupIntoLines(words, { maxWords = 6, maxChars = 32 } = {}) {
+  const lines = [];
+  let cur = [];
+  let chars = 0;
+  const flush = () => { if (cur.length) { lines.push(cur); cur = []; chars = 0; } };
+  for (const w of words) {
+    const add = w.text.length + (cur.length ? 1 : 0);
+    if (cur.length && (cur.length >= maxWords || chars + add > maxChars)) flush();
+    cur.push(w);
+    chars += add;
+    if (/[.!?…]$/.test(w.text)) flush(); // end of sentence → new cue
+  }
+  flush();
+  return lines;
+}
+
+// ---- ASS rendering ------------------------------------------------------
+
+function assTime(sec) {
+  const cs = Math.max(0, Math.round(sec * 100));
+  const h = Math.floor(cs / 360000);
+  const m = Math.floor((cs % 360000) / 6000);
+  const s = Math.floor((cs % 6000) / 100);
+  const c = cs % 100;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(c).padStart(2, '0')}`;
+}
+
+function escAss(text) {
+  return text.replace(/[\r\n]+/g, ' ').replace(/\{/g, '(').replace(/\}/g, ')');
+}
+
+// ASS colours are &HAABBGGRR. Defaults: spoken word bright yellow, not-yet-spoken
+// white, black outline.
+function assHeader({ w, h, fontSize, primary = '&H0000FFFF', secondary = '&H00FFFFFF' }) {
+  const outline = Math.max(2, Math.round(fontSize * 0.08));
+  const shadow = Math.max(0, Math.round(fontSize * 0.03));
+  const marginV = Math.round(h * 0.10);
+  return [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    'WrapStyle: 2',
+    'ScaledBorderAndShadow: yes',
+    `PlayResX: ${w}`,
+    `PlayResY: ${h}`,
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: Default,DejaVu Sans,${fontSize},${primary},${secondary},&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,${outline},${shadow},2,40,40,${marginV},1`,
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, MarginL, MarginR, Effect, Text',
+  ].join('\n');
+}
+
+// Render one Dialogue per line, each word prefixed with a `{\k}` of its own
+// duration (centiseconds) so it highlights exactly when spoken.
+function lineToDialogue(line) {
+  const start = line[0].start;
+  const end = line[line.length - 1].end;
+  const text = line
+    .map((w) => {
+      const cs = Math.max(1, Math.round((w.end - w.start) * 100));
+      return `{\\k${cs}}${escAss(w.text)}`;
+    })
+    .join(' ');
+  return `Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`;
+}
+
+/**
+ * Build a karaoke .ass caption file. Provide EITHER `cues` (preferred — real
+ * per-line timing) OR `text` + `duration` (proportional). `aspect` sizes the
+ * font to the frame. Returns the written path, or null if there's nothing to show.
+ */
+export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath, style = {} }) {
+  const words = cues ? wordsFromCues(cues) : wordsFromTextProportional(text, duration);
+  if (words.length === 0) return null;
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
+  const fontSize = style.fontSize || Math.round(h * 0.052);
+  const lines = groupIntoLines(words, style);
+  const body = lines.map(lineToDialogue).join('\n');
+  const ass = `${assHeader({ w, h, fontSize, ...style })}\n${body}\n`;
+  fs.writeFileSync(assPath, ass, 'utf8');
+  return assPath;
+}

@@ -22,14 +22,10 @@ await check('edge-tts', async () => {
   const { stdout } = await execFileP('edge-tts', ['--list-voices']);
   return `${stdout.split('\n').length} voices available`;
 });
-await check('mms-tts python (Yoruba/Igbo/Hausa)', async () => {
-  const { stdout } = await execFileP(config.mmsPython, ['-c',
-    'import torch,transformers;print("torch",torch.__version__,"cuda",torch.cuda.is_available())']);
-  return stdout.trim();
-});
 console.log('\nAPI keys:');
 console.log(`  ${config.xaiKey ? '✓' : '✗'} XAI_API_KEY`);
 console.log(`  ${config.pexelsKey ? '✓' : '✗'} PEXELS_API_KEY`);
 console.log(`  ${config.pixabayKey ? '✓' : '✗'} PIXABAY_API_KEY`);
 console.log(`  ${config.jamendoClientId ? '✓' : '✗'} JAMENDO_CLIENT_ID  (auto background music)`);
+console.log(`  ${config.yarnKey ? '✓' : '✗'} YARN_API_KEY  (Yoruba/Igbo/Hausa voices)`);
 console.log('');
