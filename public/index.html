@@ -236,7 +236,7 @@
     <div class="brand">
       <span class="eyebrow"><span class="dot"></span> Pipeline v1.0</span>
       <h1>Auto<span>Vid</span></h1>
-      <div class="sub">Grok script → free stock footage → Edge / YarnGPT voice → karaoke captions → FFmpeg cut.</div>
+      <div class="sub">AI script → stock footage → neural voiceover → karaoke captions → auto-edited cut.</div>
     </div>
     <div class="health" id="health"></div>
   </header>
@@ -253,7 +253,7 @@
 
       <label id="briefLabel" style="margin-top:18px">Topic / Idea</label>
       <textarea id="topic" placeholder="e.g. How solar mini-grids are powering rural Nigerian markets"></textarea>
-      <div class="muted" id="scriptHint" style="display:none">Your exact words are narrated — Grok only picks the footage. Pick a matching voice/language on the right.</div>
+      <div class="muted" id="scriptHint" style="display:none">Your exact words are narrated — the AI only picks the footage. Pick a matching voice/language on the right.</div>
 
       <label>Tone</label>
       <select id="tone">
@@ -333,7 +333,7 @@
       <div id="musRow" style="display:none">
         <label>Music source</label>
         <div class="seg" id="musSrc">
-          <button data-v="auto" class="on">Auto (Jamendo)</button>
+          <button data-v="auto" class="on">Auto match</button>
           <button data-v="upload">Upload file</button>
         </div>
         <div id="musUpload" style="display:none">
@@ -359,7 +359,7 @@
     </div>
   </div>
 
-  <footer>Stock footage via <b>Pexels</b> &amp; <b>Pixabay</b> · Voices via <b>Microsoft Edge Neural TTS</b> &amp; <b>YarnGPT</b> (Yoruba/Igbo/Hausa) · Editing via <b>FFmpeg</b></footer>
+  <footer><b>Stock footage</b> · <b>Neural voiceover</b> (incl. Yoruba / Igbo / Hausa) · <b>Karaoke captions</b> · <b>Automatic editing</b></footer>
 </div>
 
 <script>
@@ -371,9 +371,9 @@ let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native
 fetch('/api/health').then(r=>r.json()).then(h=>{
   const k=h.keys; const llm=h.llm||{};
   $('#health').innerHTML=
-    pill(llm.provider||'LLM', llm.configured!==false)+
-    pill('Pexels',k.pexels)+pill('Pixabay',k.pixabay)+pill('Jamendo',k.jamendo)+pill('YarnGPT',k.yarn);
-  if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Set JAMENDO_CLIENT_ID in .env to enable auto-music.';
+    pill('Script', llm.configured!==false)+
+    pill('Footage',k.pexels)+pill('Stock',k.pixabay)+pill('Music',k.jamendo)+pill('Native voices',k.yarn);
+  if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Auto-music needs a key configured in .env.';
 });
 function pill(n,ok){return `<span class="pill ${ok?'ok':'no'}"><span class="ind"></span>${n}</span>`}
 
@@ -498,7 +498,7 @@ function logLine(t,cls){const c=$('#console');
 
 function showResult(res){
   logLine('Render complete: '+res.title,'s');
-  const music = res.music ? `<div class="muted">🎵 Music: ${res.music.name} — ${res.music.artist} (Jamendo)</div>` : '';
+  const music = res.music ? `<div class="muted">🎵 Music: ${res.music.name} — ${res.music.artist}</div>` : '';
   const lang = res.language && res.language!=='English' ? `<div class="muted">🗣️ Narrated in ${res.language}</div>` : '';
   $('#resultBox').innerHTML=
     `<video controls src="/output/${res.file}"></video>${lang}${music}<br>
@@ -506,7 +506,7 @@ function showResult(res){
   if(res.scenes){
     $('#planBox').innerHTML='<b>Scene breakdown</b>'+res.scenes.map(s=>
       `<div class="sc"><b>${s.index}.</b> ${s.narration}
-       <div class="muted">query: ${s.usedQuery||s.query} · ${s.provider||''} · ${s.durationSec}s</div></div>`).join('');
+       <div class="muted">query: ${s.usedQuery||s.query} · ${s.durationSec}s</div></div>`).join('');
   }
 }
 </script>
