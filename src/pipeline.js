@@ -3,8 +3,10 @@ import { nanoid } from 'nanoid';
 import { config } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
 import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
-import { synthesizeVoice, synthesizeMany, buildProportionalSrt, writeSrtCues } from './voice.js';
+import { synthesizeVoice, synthesizeMany } from './voice.js';
+import { buildKaraokeAss, parseSrt } from './captions.js';
 import { getVoice } from './voices.js';
+import fs from 'fs';
 import { autoMusic } from './music.js';
 import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack } from './ffmpeg.js';
 
@@ -145,11 +147,10 @@ export function runPipeline(opts) {
       const n = plan.scenes.length;
       emit(job, 'planning', `Plan ready: "${plan.title}" — ${n} scenes`, 12);
 
-      // 2. Voice track + per-scene visual durations + subtitle timing.
-      let master, srtPath = null, durations;
+      // 2. Voice track + per-scene visual durations + caption timing.
+      let master, captionsPath = null, durations;
       if (bilingual) {
         // Each scene line spoken in language A then language B (own voice/engine each).
-        // Batch per language so MMS loads its model once, not once per line.
         emit(job, 'voice', `Recording ${language} lines…`, 14);
         const resA = await synthesizeMany({
           items: plan.scenes.map((sc) => ({ id: sc.index, text: sc.narration, outBase: `${id}_s${sc.index}_a` })),
@@ -172,7 +173,12 @@ export function runPipeline(opts) {
         }
         const track = await assembleVoiceTrack({ lines, outBase: `${id}_vo` });
         master = { audioPath: track.path, duration: track.duration };
-        if (subtitles) srtPath = writeSrtCues(track.cues, path.join(config.dirs.audio, `${id}_vo.srt`));
+        // Karaoke captions from each line's exact spoken window (both languages).
+        if (subtitles && track.cues.length) {
+          captionsPath = buildKaraokeAss({
+            cues: track.cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
+          });
+        }
       } else {
         // ONE flowing narration for the whole video (single utterance → no choppy seams).
         emit(job, 'voice', `Recording one continuous ${language} narration…`, 16);
@@ -181,7 +187,13 @@ export function runPipeline(opts) {
         const m = await synthesizeVoice({ text: fullText, voice, rate, outBase: `${id}_vo` });
         master = { audioPath: m.audioPath, duration: m.duration };
         if (subtitles) {
-          srtPath = m.srtPath || buildProportionalSrt(fullText, m.duration, path.join(config.dirs.audio, `${id}_vo.srt`));
+          const assPath = path.join(config.dirs.audio, `${id}_vo.ass`);
+          // Edge gives real line timings (SRT) → karaoke within each line.
+          // YarnGPT gives none → karaoke timed proportionally across the audio.
+          const cues = m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null;
+          captionsPath = cues && cues.length
+            ? buildKaraokeAss({ cues, aspect, assPath })
+            : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath });
         }
         durations = allocateDurations(sceneTexts, m.duration);
       }
@@ -229,7 +241,7 @@ export function runPipeline(opts) {
       // 7. Single final pass: narration + ducked music + subtitles + fades
       emit(job, 'render', 'Mixing audio and rendering final video…', 90);
       const finalPath = await finalizeVideo({
-        silentVideo: silent, voiceAudio: master.audioPath, srt: srtPath,
+        silentVideo: silent, voiceAudio: master.audioPath, captions: captionsPath,
         bgMusic, aspect, fades, outName: `${id}_final.mp4`,
       });
 

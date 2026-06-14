@@ -1,15 +1,18 @@
 // Voice catalogue, grouped for the UI.
 //   engine: 'edge'  → Microsoft Edge neural voices via edge-tts (free, online)
-//           'mms'   → Meta MMS-TTS run locally on the GPU (for languages edge lacks)
+//           'yarn'  → YarnGPT hosted Nigerian-language TTS (Yoruba/Igbo/Hausa)
 //   lang:   the language Grok must WRITE the narration in (stock queries stay English)
-//   mmsLang: MMS model code (yor/ibo/hau) when engine === 'mms'
+//   yarnVoice: the YarnGPT speaker name to use when engine === 'yarn'
 
 export const VOICES = {
   // Native-language neural voices — the script is written in that language.
   native: [
-    { id: 'mms-yor',             label: 'Yorùbá (Naija) — neural',           gender: 'Neutral', engine: 'mms',  mmsLang: 'yor', locale: 'yo-NG', lang: 'Yoruba' },
-    { id: 'mms-ibo',             label: 'Igbo (Naija) — neural',             gender: 'Neutral', engine: 'mms',  mmsLang: 'ibo', locale: 'ig-NG', lang: 'Igbo' },
-    { id: 'mms-hau',             label: 'Hausa (Naija) — neural',            gender: 'Neutral', engine: 'mms',  mmsLang: 'hau', locale: 'ha-NG', lang: 'Hausa' },
+    { id: 'yarn-yor-f',          label: 'Yorùbá — Idera (F, melodic)',       gender: 'Female',  engine: 'yarn', yarnVoice: 'Idera',    locale: 'yo-NG', lang: 'Yoruba' },
+    { id: 'yarn-yor-m',          label: 'Yorùbá — Femi (M, rich)',           gender: 'Male',    engine: 'yarn', yarnVoice: 'Femi',     locale: 'yo-NG', lang: 'Yoruba' },
+    { id: 'yarn-ibo-f',          label: 'Igbo — Chinenye (F, warm)',         gender: 'Female',  engine: 'yarn', yarnVoice: 'Chinenye', locale: 'ig-NG', lang: 'Igbo' },
+    { id: 'yarn-ibo-m',          label: 'Igbo — Nonso (M, bold)',            gender: 'Male',    engine: 'yarn', yarnVoice: 'Nonso',    locale: 'ig-NG', lang: 'Igbo' },
+    { id: 'yarn-hau-f',          label: 'Hausa — Zainab (F, soothing)',      gender: 'Female',  engine: 'yarn', yarnVoice: 'Zainab',   locale: 'ha-NG', lang: 'Hausa' },
+    { id: 'yarn-hau-m',          label: 'Hausa — Umar (M, calm)',            gender: 'Male',    engine: 'yarn', yarnVoice: 'Umar',     locale: 'ha-NG', lang: 'Hausa' },
     { id: 'sw-KE-ZuriNeural',    label: 'Zuri — Swahili (Kenya, F)',         gender: 'Female',  engine: 'edge', locale: 'sw-KE', lang: 'Swahili' },
     { id: 'sw-KE-RafikiNeural',  label: 'Rafiki — Swahili (Kenya, M)',       gender: 'Male',    engine: 'edge', locale: 'sw-KE', lang: 'Swahili' },
     { id: 'zu-ZA-ThandoNeural',  label: 'Thando — Zulu (South Africa, F)',   gender: 'Female',  engine: 'edge', locale: 'zu-ZA', lang: 'Zulu' },

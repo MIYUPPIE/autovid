@@ -40,6 +40,7 @@ app.get('/api/health', (req, res) => {
       pexels: Boolean(config.pexelsKey),
       pixabay: Boolean(config.pixabayKey),
       jamendo: Boolean(config.jamendoClientId),
+      yarn: Boolean(config.yarnKey),
     },
     llm: activeLlm(),
     model: config.xaiModel,

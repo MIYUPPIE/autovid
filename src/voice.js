@@ -2,13 +2,13 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
-import { config, ROOT } from './config.js';
+import fetch from 'node-fetch';
+import { config } from './config.js';
 import { getVoice } from './voices.js';
 
 const execFileP = promisify(execFile);
-const MMS_SCRIPT = path.join(ROOT, 'src', 'mms_tts.py');
 
-// "+10%" → 1.10 tempo multiplier for ffmpeg atempo (used to honor speaking rate on MMS).
+// "+10%" → 1.10 tempo multiplier for ffmpeg atempo (engines with no native rate).
 function rateToTempo(rate) {
   const m = /([+-]?\d+)\s*%/.exec(rate || '');
   const pct = m ? parseInt(m[1], 10) : 0;
@@ -31,14 +31,14 @@ export async function probeDuration(file) {
 /**
  * Synthesize a voiceover for `text`, routing to the voice's engine.
  *   edge → mp3 + word-timed SRT
- *   mms  → wav via the local GPU model (no SRT; caller estimates subtitle timing)
+ *   yarn → mp3 via YarnGPT (no SRT; captions are karaoke-timed by the caller)
  * Returns { audioPath, srtPath|null, duration, engine }.
  */
 export async function synthesizeVoice({ text, voice, rate = '+0%', pitch = '+0Hz', outBase }) {
   const meta = getVoice(voice);
   const engine = meta?.engine || 'edge';
-  if (engine === 'mms') {
-    return synthMms({ text, mmsLang: meta.mmsLang, rate, outBase });
+  if (engine === 'yarn') {
+    return synthYarn({ text, yarnVoice: meta.yarnVoice, rate, outBase });
   }
   return synthEdge({ text, voice, rate, pitch, outBase });
 }
@@ -69,77 +69,110 @@ async function synthEdge({ text, voice, rate, pitch, outBase }) {
   return { audioPath, srtPath, duration, engine: 'edge' };
 }
 
-async function synthMms({ text, mmsLang, rate, outBase }) {
-  const rawWav = path.join(config.dirs.audio, `${outBase}_mms.wav`);
-  const audioPath = path.join(config.dirs.audio, `${outBase}.mp3`);
-  const textFile = path.join(config.dirs.audio, `${outBase}.txt`);
-  fs.writeFileSync(textFile, text, 'utf8');
-
-  try {
-    await execFileP(config.mmsPython, [MMS_SCRIPT, '--lang', mmsLang, '--text-file', textFile, '--out', rawWav],
-      { maxBuffer: 1024 * 1024 * 16 });
-  } catch (err) {
-    if (err.code === 'ENOENT') {
-      throw new Error(`MMS python not found at ${config.mmsPython}. Set MMS_PYTHON in .env.`);
+// Split text into chunks under YarnGPT's per-request character cap, breaking on
+// sentence boundaries (then commas, then hard length) so no word is cut.
+export function chunkForYarn(text, max = config.yarnMaxChars) {
+  const clean = (text || '').replace(/\s+/g, ' ').trim();
+  if (clean.length <= max) return clean ? [clean] : [];
+  const sentences = clean.match(/[^.!?…]+[.!?…]*\s*/g) || [clean];
+  const chunks = [];
+  let cur = '';
+  const push = () => { if (cur.trim()) chunks.push(cur.trim()); cur = ''; };
+  for (let s of sentences) {
+    // A single sentence longer than max: split on commas / spaces.
+    while (s.length > max) {
+      const slice = s.slice(0, max);
+      const cut = Math.max(slice.lastIndexOf(', '), slice.lastIndexOf(' '));
+      const at = cut > max * 0.5 ? cut + 1 : max;
+      if (cur) push();
+      chunks.push(s.slice(0, at).trim());
+      s = s.slice(at);
     }
-    const detail = (err.stderr || err.message || '').toString().split('\n').slice(-3).join(' ');
-    throw new Error(`MMS TTS (${mmsLang}) failed: ${detail}`);
+    if ((cur + s).length > max) push();
+    cur += s;
   }
-
-  // Encode to mp3 and apply the speaking-rate (MMS has no native rate control).
-  const tempo = rateToTempo(rate);
-  const af = tempo !== 1 ? ['-filter:a', `atempo=${tempo.toFixed(3)}`] : [];
-  await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', rawWav, ...af,
-    '-c:a', 'libmp3lame', '-q:a', '3', audioPath], { maxBuffer: 1024 * 1024 * 16 });
-  try { fs.unlinkSync(rawWav); } catch { /* ignore */ }
-
-  const duration = await probeDuration(audioPath);
-  return { audioPath, srtPath: null, duration, engine: 'mms' };
+  push();
+  return chunks;
 }
 
-// Encode a wav to mp3, applying the speaking rate (MMS has no native rate control).
-async function wavToMp3(rawWav, mp3Path, rate) {
+// One YarnGPT request → mp3 bytes on disk. Throws with a clear message on
+// auth/quota/network failure so the pipeline surfaces it.
+async function yarnRequest({ text, yarnVoice, outPath }) {
+  if (!config.yarnKey) throw new Error('YARN_API_KEY not set — required for Yoruba/Igbo/Hausa voices.');
+  let res;
+  try {
+    res = await fetch(`${config.yarnBase}/tts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text, voice: yarnVoice, response_format: 'mp3' }),
+    });
+  } catch (err) {
+    throw new Error(`YarnGPT request failed (network): ${err.message}`);
+  }
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    throw new Error(`YarnGPT ${res.status} ${res.statusText}: ${body.slice(0, 200)}`);
+  }
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 256) throw new Error('YarnGPT returned an empty/too-small audio body.');
+  fs.writeFileSync(outPath, buf);
+  return outPath;
+}
+
+async function synthYarn({ text, yarnVoice, rate, outBase }) {
+  const audioPath = path.join(config.dirs.audio, `${outBase}.mp3`);
+  const chunks = chunkForYarn(text);
+  if (chunks.length === 0) throw new Error('YarnGPT: empty narration text.');
+
+  // Synthesize each chunk, then concat (re-encode) into one mp3.
+  const parts = [];
+  for (let i = 0; i < chunks.length; i++) {
+    const part = path.join(config.dirs.audio, `${outBase}_y${i}.mp3`);
+    await yarnRequest({ text: chunks[i], yarnVoice, outPath: part });
+    parts.push(part);
+  }
+
   const tempo = rateToTempo(rate);
   const af = tempo !== 1 ? ['-filter:a', `atempo=${tempo.toFixed(3)}`] : [];
-  await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', rawWav, ...af,
-    '-c:a', 'libmp3lame', '-q:a', '3', mp3Path], { maxBuffer: 1024 * 1024 * 16 });
-  try { fs.unlinkSync(rawWav); } catch { /* ignore */ }
+  if (parts.length === 1 && tempo === 1) {
+    fs.renameSync(parts[0], audioPath);
+  } else if (parts.length === 1) {
+    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', parts[0], ...af,
+      '-c:a', 'libmp3lame', '-q:a', '3', audioPath], { maxBuffer: 1024 * 1024 * 16 });
+    try { fs.unlinkSync(parts[0]); } catch { /* ignore */ }
+  } else {
+    // Uniform-format each part, then stream-copy concat (seamless, no gaps).
+    const norm = [];
+    for (let i = 0; i < parts.length; i++) {
+      const n = path.join(config.dirs.audio, `${outBase}_yn${i}.mp3`);
+      await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', parts[i], ...af,
+        '-ar', '44100', '-ac', '2', '-c:a', 'libmp3lame', '-q:a', '3', n], { maxBuffer: 1024 * 1024 * 16 });
+      norm.push(n);
+    }
+    const listPath = path.join(config.dirs.audio, `${outBase}_ylist.txt`);
+    fs.writeFileSync(listPath, norm.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
+    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error',
+      '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', audioPath], { maxBuffer: 1024 * 1024 * 16 });
+    for (const f of [...parts, ...norm, listPath]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+
+  const duration = await probeDuration(audioPath);
+  return { audioPath, srtPath: null, duration, engine: 'yarn' };
 }
 
 /**
- * Synthesize MANY lines for one voice. For MMS this loads the model ONCE for all
- * lines (a big win for long/bilingual scripts); for edge it loops. `items` are
- * [{ id, text, outBase }]; returns [{ id, audioPath, duration }] in order.
+ * Synthesize MANY lines for one voice (used by bilingual mode, one line per
+ * scene). `items` are [{ id, text, outBase }]; returns [{ id, audioPath,
+ * duration }] in order. Both edge and yarn are network calls, so we loop.
  */
 export async function synthesizeMany({ items, voice, rate = '+0%' }) {
   if (items.length === 0) return [];
   const meta = getVoice(voice);
-  if (meta?.engine === 'mms') {
-    const batchFile = path.join(config.dirs.audio, `${items[0].outBase}_batch.json`);
-    fs.writeFileSync(batchFile, JSON.stringify(items.map((it) => ({ id: it.outBase, text: it.text }))), 'utf8');
-    try {
-      await execFileP(config.mmsPython,
-        [MMS_SCRIPT, '--lang', meta.mmsLang, '--batch-file', batchFile, '--out-dir', config.dirs.audio],
-        { maxBuffer: 1024 * 1024 * 16 });
-    } catch (err) {
-      const detail = (err.stderr || err.message || '').toString().split('\n').slice(-3).join(' ');
-      throw new Error(`MMS batch (${meta.mmsLang}) failed: ${detail}`);
-    } finally {
-      try { fs.unlinkSync(batchFile); } catch { /* ignore */ }
-    }
-    const out = [];
-    for (const it of items) {
-      const wavPath = path.join(config.dirs.audio, `${it.outBase}.wav`);
-      const mp3Path = path.join(config.dirs.audio, `${it.outBase}.mp3`);
-      await wavToMp3(wavPath, mp3Path, rate);
-      out.push({ id: it.id, audioPath: mp3Path, duration: await probeDuration(mp3Path) });
-    }
-    return out;
-  }
-  // edge: synthesize each line (network calls are fast enough to loop)
   const out = [];
   for (const it of items) {
-    const r = await synthEdge({ text: it.text, voice, rate, pitch: '+0Hz', outBase: it.outBase });
+    const r = meta?.engine === 'yarn'
+      ? await synthYarn({ text: it.text, yarnVoice: meta.yarnVoice, rate, outBase: it.outBase })
+      : await synthEdge({ text: it.text, voice, rate, pitch: '+0Hz', outBase: it.outBase });
     out.push({ id: it.id, audioPath: r.audioPath, duration: r.duration });
   }
   return out;
@@ -166,8 +199,8 @@ function srtTime(sec) {
 
 /**
  * Build an SRT for `text` spread across `duration` seconds, one cue per sentence,
- * each cue's length proportional to its character count. Used when the engine
- * gives no timestamps (MMS). Returns the srt path.
+ * each cue's length proportional to its character count. Legacy sentence-level
+ * fallback; the pipeline now uses karaoke captions (see captions.js). Returns the srt path.
  */
 export function buildProportionalSrt(text, duration, srtPath) {
   const sentences = text

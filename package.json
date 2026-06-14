@@ -9,7 +9,8 @@
     "dev": "node --watch src/server.js",
     "check": "node src/check-env.js",
     "test": "node --test test/gate.test.js",
-    "eval": "node test/eval.js"
+    "eval": "node test/eval.js",
+    "eval:yarn": "node test/yarn.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",
