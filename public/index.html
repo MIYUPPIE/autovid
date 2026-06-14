@@ -359,7 +359,7 @@
     </div>
   </div>
 
-  <footer>Stock footage via <b>Pexels</b> &amp; <b>Pixabay</b> · Voices via <b>Microsoft Edge Neural TTS</b> · Editing via <b>FFmpeg</b></footer>
+  <footer>Stock footage via <b>Pexels</b> &amp; <b>Pixabay</b> · Voices via <b>Microsoft Edge Neural TTS</b> &amp; <b>YarnGPT</b> (Yoruba/Igbo/Hausa) · Editing via <b>FFmpeg</b></footer>
 </div>
 
 <script>
@@ -372,7 +372,7 @@ fetch('/api/health').then(r=>r.json()).then(h=>{
   const k=h.keys; const llm=h.llm||{};
   $('#health').innerHTML=
     pill(llm.provider||'LLM', llm.configured!==false)+
-    pill('Pexels',k.pexels)+pill('Pixabay',k.pixabay)+pill('Jamendo',k.jamendo);
+    pill('Pexels',k.pexels)+pill('Pixabay',k.pixabay)+pill('Jamendo',k.jamendo)+pill('YarnGPT',k.yarn);
   if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Set JAMENDO_CLIENT_ID in .env to enable auto-music.';
 });
 function pill(n,ok){return `<span class="pill ${ok?'ok':'no'}"><span class="ind"></span>${n}</span>`}
