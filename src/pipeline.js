@@ -9,6 +9,8 @@ import { getVoice } from './voices.js';
 import fs from 'fs';
 import { autoMusic } from './music.js';
 import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack } from './ffmpeg.js';
+import { buildProject, saveProject, planRender, loadProject } from './project.js';
+import { renderProject } from './render.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
 const GAP_BETWEEN_LANGS = 0.25;
@@ -19,6 +21,43 @@ const jobs = new Map();
 
 export function getJob(id) {
   return jobs.get(id);
+}
+
+// Coarse progress percentages for an incremental re-render, by stage.
+const RENDER_PCT = { init: 2, normalize: 40, concat: 80, finalize: 90, done: 100, error: 100 };
+
+/**
+ * Kick off an incremental re-render of a saved project. Registers a job in the
+ * same map the /api/job endpoints poll, so the client reuses existing plumbing.
+ * Returns the job id, or null if the project doesn't exist.
+ */
+export function startProjectRender(projectId) {
+  const project = loadProject(projectId);
+  if (!project) return null;
+  const id = nanoid(10);
+  const job = {
+    id, kind: 'render', status: 'running', createdAt: Date.now(),
+    log: [], progress: { stage: 'init', message: 'Starting re-render', pct: 2 },
+    result: null, error: null,
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const out = await renderProject(project, {
+        onProgress: (stage, message) => emit(job, stage, message, RENDER_PCT[stage] ?? job.progress.pct),
+      });
+      job.result = { file: out.file, path: out.outputPath, projectId, plan: out.plan };
+      job.status = 'done';
+      emit(job, 'done', 'Re-render complete', 100);
+    } catch (err) {
+      job.status = 'error';
+      job.error = err.message;
+      emit(job, 'error', err.message, job.progress.pct);
+    }
+  })();
+
+  return id;
 }
 
 function emit(job, stage, message, pct) {
@@ -148,7 +187,8 @@ export function runPipeline(opts) {
       emit(job, 'planning', `Plan ready: "${plan.title}" — ${n} scenes`, 12);
 
       // 2. Voice track + per-scene visual durations + caption timing.
-      let master, captionsPath = null, durations;
+      // captionCues is the editable source of truth saved to the project doc.
+      let master, captionsPath = null, durations, captionCues = null;
       if (bilingual) {
         // Each scene line spoken in language A then language B (own voice/engine each).
         emit(job, 'voice', `Recording ${language} lines…`, 14);
@@ -175,6 +215,7 @@ export function runPipeline(opts) {
         master = { audioPath: track.path, duration: track.duration };
         // Karaoke captions from each line's exact spoken window (both languages).
         if (subtitles && track.cues.length) {
+          captionCues = track.cues;
           captionsPath = buildKaraokeAss({
             cues: track.cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
           });
@@ -198,6 +239,7 @@ export function runPipeline(opts) {
           const cues = m.cues?.length
             ? m.cues
             : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
+          captionCues = cues && cues.length ? cues : null;
           captionsPath = cues && cues.length
             ? buildKaraokeAss({ cues, aspect, assPath })
             : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath });
@@ -229,12 +271,14 @@ export function runPipeline(opts) {
         });
         done += 1;
         emit(job, 'editing', `Scene ${scene.index}/${n} ready (${acquired.clip.provider})`, 20 + Math.round((done / n) * 55));
-        return norm;
+        // Keep both paths: the normalized clip feeds the concat now, the raw
+        // source survives for re-edits (re-trim / re-frame) from the project doc.
+        return { norm, source: acquired.path };
       });
 
       // 5. Concatenate the silent scene clips (stream-copy, fast)
       emit(job, 'render', 'Stitching scenes…', 80);
-      const silent = await concatSilent({ sceneFiles, outBase: id });
+      const silent = await concatSilent({ sceneFiles: sceneFiles.map((r) => r.norm), outBase: id });
 
       // 6. Background music: explicit upload wins; else auto-fetch from Jamendo
       let bgMusic = bgMusicPath || null;
@@ -252,9 +296,34 @@ export function runPipeline(opts) {
         bgMusic, aspect, fades, outName: `${id}_final.mp4`,
       });
 
+      // 8. Persist the editable project document (the timeline behind this MP4).
+      // This is what an editor mutates and render.js re-renders incrementally.
+      const project = buildProject({
+        id, opts, plan, aspect, fps: 30,
+        language: bilingual ? `${language} + ${language2}` : language, bilingual,
+        voiceTrack: { path: master.audioPath, duration: masterDur },
+        captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [] },
+        music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta } : null,
+        scenes: plan.scenes.map((sc, i) => ({
+          index: sc.index, narration: sc.narration, query: sc.query,
+          usedQuery: sc.usedQuery, provider: sc.provider,
+          sourcePath: sceneFiles[i].source, clipPath: sceneFiles[i].norm,
+          duration: durations[i], motion,
+        })),
+      });
+      // Seed the render cache so the first edit only redoes what actually changed,
+      // not the whole video (the assets this run produced are already on disk).
+      const seeded = planRender(project);
+      project.render = {
+        scenes: seeded.hashes.scenes, concat: seeded.hashes.concat, final: seeded.hashes.final,
+        silentPath: silent, outputPath: finalPath, renderedAt: Date.now(),
+      };
+      saveProject(project);
+
       job.result = {
         file: path.basename(finalPath),
         path: finalPath,
+        projectId: id,
         title: plan.title,
         language: bilingual ? `${language} + ${language2}` : language,
         bilingual,

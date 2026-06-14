@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
 import { ensureDirs } from './voice.js';
-import { runPipeline, getJob } from './pipeline.js';
+import { runPipeline, getJob, startProjectRender } from './pipeline.js';
+import { loadProject, saveProject, validateProject, relayout, listProjects } from './project.js';
 import { activeLlm } from './llm.js';
 
 ensureDirs();
@@ -73,6 +74,45 @@ app.post('/api/render', (req, res) => {
     subtitles, bgMusicPath, fades, motion, autoMusic,
   });
   res.json({ jobId: id });
+});
+
+// --- Editable projects (timeline documents behind each video) ---
+
+// List saved projects (most recently edited first).
+app.get('/api/projects', (req, res) => {
+  res.json({ projects: listProjects() });
+});
+
+// Load one project's full timeline document.
+app.get('/api/project/:id', (req, res) => {
+  const p = loadProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'not found' });
+  res.json(p);
+});
+
+// Save edits. The render cache lives server-side; preserve it across edits so the
+// next re-render only redoes what the edit actually changed.
+app.put('/api/project/:id', (req, res) => {
+  const existing = loadProject(req.params.id);
+  if (!existing) return res.status(404).json({ error: 'not found' });
+  const incoming = req.body || {};
+  incoming.id = req.params.id;            // path is authoritative
+  incoming.render = existing.render;      // keep the cache the client never sees
+  try {
+    validateProject(incoming);
+  } catch (err) {
+    return res.status(400).json({ error: err.message, validation: err.validation || null });
+  }
+  relayout(incoming);                     // recompute scene start times after trims/reorders
+  saveProject(incoming);
+  res.json({ ok: true, project: incoming });
+});
+
+// Kick off an incremental re-render. Poll progress via /api/job/:id (same as renders).
+app.post('/api/project/:id/render', (req, res) => {
+  const jobId = startProjectRender(req.params.id);
+  if (!jobId) return res.status(404).json({ error: 'not found' });
+  res.json({ jobId });
 });
 
 // --- Poll job status ---

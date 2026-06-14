@@ -60,6 +60,9 @@ export const config = {
     audio: path.join(ROOT, 'assets', 'audio'),
     output: path.join(ROOT, 'assets', 'output'),
     work: path.join(ROOT, 'assets', 'work'),
+    // Editable timeline documents (one JSON per video). The render cache
+    // (normalized scene clips, silent concat) lives in work/; voice in audio/.
+    projects: path.join(ROOT, 'assets', 'projects'),
   },
 };
 

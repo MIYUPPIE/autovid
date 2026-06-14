@@ -86,6 +86,32 @@ the picture tracks the voice with no per-scene seams. Footage is downloaded with
 concurrency; oversized/slow clips are skipped for the next candidate so one bad download
 can't stall or kill the render.
 
+## Editable projects (edit after creation)
+
+A rendered `.mp4` can't be edited — captions are burned into pixels and audio is mixed into one track. So every render also writes an **editable project document**: the timeline recipe behind the video. Edit that, re-render, and only the stages your edit touched are redone.
+
+- `project.js` — the timeline doc (scenes, source + normalized clip paths, durations, caption cues, music, effects), validation, save/load, and `planRender` (decides which stages are stale — pure, fully unit-tested).
+- `render.js` — `renderProject()` re-renders incrementally using the cache recorded on `project.render`.
+
+What an edit costs:
+
+| Edit | Re-renders | Cost |
+|------|-----------|------|
+| caption text/style, music volume, fades | final mux only | cheapest re-encode |
+| trim / reorder / delete scenes | concat (stream-copy) + final | fast |
+| swap a scene's footage | that one scene + concat + final | one GPU encode |
+
+API:
+```
+GET  /api/projects              list saved projects
+GET  /api/project/:id           load the timeline doc
+PUT  /api/project/:id           save edits (validated, timeline relayed out)
+POST /api/project/:id/render    incremental re-render → poll /api/job/:id
+```
+`npm run eval:render` proves the cache end-to-end with real ffmpeg (full render, then a caption-only edit that reuses every scene encode).
+
+> Next phase: the browser NLE on Remotion + designcombo. The plan/project doc maps 1:1 to a Remotion composition; `@remotion/player` gives real-time preview, and export stays on this nvenc pipeline.
+
 ## Notes
 - Stock licenses: Pexels & Pixabay are free for commercial use, no attribution required. Keep records if your platform needs them.
 - If a scene query returns nothing, Grok is asked for alternative queries automatically.
