@@ -300,6 +300,42 @@ test('captions: buildKaraokeAss writes a valid ASS with \\k tags and every word'
   for (const w of ['Ndi', 'Igbo', 'kwenu.', 'Daalu.']) assert.ok(ass.includes(w), `keeps word ${w}`);
 });
 
+test('captions: ASS Events Format matches the Dialogue layout (no "0,," leak)', () => {
+  // Regression: a short Format line made libass spill margin/effect values
+  // ("0,,") into the visible caption text. Format must declare all 10 V4+ event
+  // fields, and every Dialogue's Text must begin with the karaoke override, not
+  // a stray field value.
+  const assPath = path.join(os.tmpdir(), `av_fmt_${Date.now()}.ass`);
+  buildKaraokeAss({ cues: [{ start: 0, end: 4, text: 'Ìlú Ìbàdàn jẹ́ ọ̀kan lára àwọn' }], aspect: '9:16', assPath });
+  const lines = fs.readFileSync(assPath, 'utf8').split('\n');
+  fs.unlinkSync(assPath);
+
+  const fmt = lines.find((l) => l.startsWith('Format:') && l.includes('Text'));
+  const fmtFields = fmt.replace('Format:', '').split(',').map((s) => s.trim());
+  assert.deepEqual(fmtFields,
+    ['Layer', 'Start', 'End', 'Style', 'Name', 'MarginL', 'MarginR', 'MarginV', 'Effect', 'Text']);
+
+  for (const d of lines.filter((l) => l.startsWith('Dialogue:'))) {
+    // Text is everything after the first 9 commas; it must start with "{\k".
+    const text = d.replace('Dialogue:', '').split(',').slice(9).join(',');
+    assert.ok(text.startsWith('{\\k'), `Dialogue text leaked a field: "${text.slice(0, 12)}"`);
+    assert.ok(!/^0,/.test(text), 'no stray "0," prefix in caption text');
+  }
+});
+
+test('captions: long line is split so it fits the frame width', () => {
+  // A long single cue must become several short display lines (so nothing runs
+  // off-screen), with no words lost.
+  const assPath = path.join(os.tmpdir(), `av_wrap_${Date.now()}.ass`);
+  const text = 'Ilu Ibadan je okan lara awon ilu to tobi julo ni ile Yoruba pelu itan oloro ati ojo iwaju to dara gan an';
+  buildKaraokeAss({ cues: [{ start: 0, end: 10, text }], aspect: '9:16', assPath });
+  const dlg = fs.readFileSync(assPath, 'utf8').split('\n').filter((l) => l.startsWith('Dialogue:'));
+  fs.unlinkSync(assPath);
+  assert.ok(dlg.length >= 3, `long text should break into several cues, got ${dlg.length}`);
+  const shown = dlg.map((d) => d.split(',').slice(9).join(',').replace(/\{\\k\d+\}/g, '')).join(' ').replace(/\s+/g, ' ').trim();
+  assert.equal(shown.split(' ').length, text.split(' ').length, 'no words lost across wrapped lines');
+});
+
 test('captions: nothing to show → null (no file, no crash)', () => {
   const assPath = path.join(os.tmpdir(), `av_empty_${Date.now()}.ass`);
   assert.equal(buildKaraokeAss({ text: '', duration: 5, assPath }), null);

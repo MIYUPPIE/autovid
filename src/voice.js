@@ -159,42 +159,49 @@ async function synthYarn({ text, yarnVoice, rate, outBase, onProgress }) {
   const chunks = chunkForYarn(text, yarnChunkTarget(len));
   if (chunks.length === 0) throw new Error('YarnGPT: empty narration text.');
 
-  // Synthesize chunks concurrently (bounded), preserving order, then concat.
+  // 1. Synthesize chunks concurrently (bounded), preserving order.
   let done = 0;
   onProgress && onProgress(0, chunks.length);
-  const parts = await mapLimit(chunks, config.yarnConcurrency, async (chunk, i) => {
+  const rawParts = await mapLimit(chunks, config.yarnConcurrency, async (chunk, i) => {
     const part = path.join(config.dirs.audio, `${outBase}_y${i}.mp3`);
     await yarnRequest({ text: chunk, yarnVoice, outPath: part });
     onProgress && onProgress(++done, chunks.length);
     return part;
   });
 
+  // 2. Normalize each part to a uniform format (and apply speaking rate), then
+  //    probe its REAL duration. Those measured windows are what the captions
+  //    anchor to — distributing words across the whole audio drifts because each
+  //    chunk carries its own leading/trailing silence and pacing.
   const tempo = rateToTempo(rate);
   const af = tempo !== 1 ? ['-filter:a', `atempo=${tempo.toFixed(3)}`] : [];
-  if (parts.length === 1 && tempo === 1) {
-    fs.renameSync(parts[0], audioPath);
-  } else if (parts.length === 1) {
-    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', parts[0], ...af,
-      '-c:a', 'libmp3lame', '-q:a', '3', audioPath], { maxBuffer: 1024 * 1024 * 16 });
-    try { fs.unlinkSync(parts[0]); } catch { /* ignore */ }
-  } else {
-    // Uniform-format each part, then stream-copy concat (seamless, no gaps).
-    const norm = [];
-    for (let i = 0; i < parts.length; i++) {
-      const n = path.join(config.dirs.audio, `${outBase}_yn${i}.mp3`);
-      await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', parts[i], ...af,
-        '-ar', '44100', '-ac', '2', '-c:a', 'libmp3lame', '-q:a', '3', n], { maxBuffer: 1024 * 1024 * 16 });
-      norm.push(n);
-    }
-    const listPath = path.join(config.dirs.audio, `${outBase}_ylist.txt`);
-    fs.writeFileSync(listPath, norm.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
-    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error',
-      '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', audioPath], { maxBuffer: 1024 * 1024 * 16 });
-    for (const f of [...parts, ...norm, listPath]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  const normParts = [];
+  const cues = [];
+  let t = 0;
+  for (let i = 0; i < rawParts.length; i++) {
+    const n = path.join(config.dirs.audio, `${outBase}_yn${i}.mp3`);
+    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error', '-i', rawParts[i], ...af,
+      '-ar', '44100', '-ac', '2', '-c:a', 'libmp3lame', '-q:a', '3', n], { maxBuffer: 1024 * 1024 * 16 });
+    const d = await probeDuration(n);
+    cues.push({ start: t, end: t + d, text: chunks[i] });
+    t += d;
+    normParts.push(n);
   }
 
+  // 3. Concat the uniform parts (stream-copy, seamless) into the final mp3.
+  if (normParts.length === 1) {
+    fs.renameSync(normParts[0], audioPath);
+  } else {
+    const listPath = path.join(config.dirs.audio, `${outBase}_ylist.txt`);
+    fs.writeFileSync(listPath, normParts.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
+    await execFileP('ffmpeg', ['-y', '-hide_banner', '-loglevel', 'error',
+      '-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', audioPath], { maxBuffer: 1024 * 1024 * 16 });
+    for (const f of [...normParts, listPath]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+  for (const f of rawParts) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+
   const duration = await probeDuration(audioPath);
-  return { audioPath, srtPath: null, duration, engine: 'yarn' };
+  return { audioPath, srtPath: null, duration, engine: 'yarn', cues };
 }
 
 /**
