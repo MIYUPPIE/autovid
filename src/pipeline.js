@@ -184,7 +184,11 @@ export function runPipeline(opts) {
         emit(job, 'voice', `Recording one continuous ${language} narration…`, 16);
         const sceneTexts = buildSceneTexts(plan);
         const fullText = sceneTexts.join(' ');
-        const m = await synthesizeVoice({ text: fullText, voice, rate, outBase: `${id}_vo` });
+        const m = await synthesizeVoice({
+          text: fullText, voice, rate, outBase: `${id}_vo`,
+          onProgress: (n, total) => total > 1 &&
+            emit(job, 'voice', `Recording ${language} narration… (${n}/${total} chunks)`, 16),
+        });
         master = { audioPath: m.audioPath, duration: m.duration };
         if (subtitles) {
           const assPath = path.join(config.dirs.audio, `${id}_vo.ass`);

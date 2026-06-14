@@ -13,7 +13,7 @@ import { orientationFor, scoreCandidate } from '../src/stock.js';
 import { parseJsonLoose, splitScriptIntoScenes } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
-import { buildProportionalSrt, chunkForYarn } from '../src/voice.js';
+import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
 import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
 } from '../src/captions.js';
@@ -325,6 +325,26 @@ test('yarn: long text splits under the cap on sentence boundaries, losing no wor
 
 test('yarn: empty text yields no chunks', () => {
   assert.deepEqual(chunkForYarn('   ', 1800), []);
+});
+
+test('yarn: chunk target aims for ~concurrency chunks, floored and capped', () => {
+  const opts = { concurrency: 4, min: 100, max: 1800 };
+  // Short text: floored so we don't split mid-sentence into tiny pieces.
+  assert.equal(yarnChunkTarget(80, opts), 100);
+  // Medium text: ~len/concurrency so one parallel wave of 4 covers it.
+  assert.equal(yarnChunkTarget(800, opts), 200);
+  // Long text: capped at the hard per-request limit.
+  assert.equal(yarnChunkTarget(100000, opts), 1800);
+});
+
+test('yarn: a typical narration splits into about concurrency chunks (one wave)', () => {
+  // ~4 sentences, ~260 chars — should fan out into ≤4 parallel requests.
+  const narration =
+    'Ilu Ibadan je okan lara awon ilu to tobi julo. Lati igba atijo, o ti je ibudo fun owo ati asa. ' +
+    'Awon eniyan re mo fun ise agbe ati eko. Ni ode oni, Ibadan n tesiwaju gege bi ilu to ni itan oloro.';
+  const chunks = chunkForYarn(narration, yarnChunkTarget(narration.length, { concurrency: 4, min: 100, max: 1800 }));
+  assert.ok(chunks.length >= 2 && chunks.length <= 4, `expected 2-4 chunks, got ${chunks.length}`);
+  assert.equal(chunks.join(' ').split(/\s+/).length, narration.split(/\s+/).length, 'no words lost');
 });
 
 // ---------- footage resilience (the "aborted download killed the render" bug) ----------
