@@ -1,0 +1,24 @@
+{
+  "name": "autovid-pipeline",
+  "version": "1.0.0",
+  "description": "AI-assisted video pipeline: xAI scripting + free stock footage + Edge-TTS voiceover + FFmpeg editing engine",
+  "type": "module",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "check": "node src/check-env.js",
+    "test": "node --test test/gate.test.js",
+    "eval": "node test/eval.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "node-fetch": "^3.3.2",
+    "nanoid": "^5.0.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

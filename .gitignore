@@ -1,0 +1,7 @@
+node_modules/
+.env
+assets/raw/*
+assets/audio/*
+assets/work/*
+assets/output/*
+!assets/**/.gitkeep
