@@ -73,7 +73,7 @@ async function searchPixabay(query, orientation) {
   return out;
 }
 
-export function scoreCandidate(c, want) {
+export function scoreCandidate(c, want, minDur = 0) {
   // Prefer correct orientation, a usable clip length, and ~720-1080p (not 4K).
   let score = 0;
   const ratio = c.width && c.height ? c.width / c.height : 1;
@@ -86,6 +86,15 @@ export function scoreCandidate(c, want) {
   else if (d > 20 && d <= 35) score += 1;  // usable
   else if (d > 35) score -= 2;             // long clip = big download for a few seconds
 
+  // Prefer a clip that covers the whole scene so it doesn't visibly loop. A clip
+  // shorter than the scene gets `-stream_loop`-ed (the same footage replays),
+  // which reads as repetition; bias toward ones long enough to avoid that.
+  if (minDur > 0) {
+    if (d >= minDur) score += 3;                 // covers the scene, no loop
+    else if (d >= minDur * 0.7) score += 1;      // close — at most a short tail loop
+    else if (d > 0) score -= 2;                  // far too short → obvious repeat
+  }
+
   // Judge by the short side so portrait clips (height 1920) aren't mistaken for 4K.
   const shortSide = Math.min(c.width || 0, c.height || 0);
   if (shortSide >= 720 && shortSide <= 1080) score += 2; // sweet spot for a 1080p render
@@ -93,18 +102,52 @@ export function scoreCandidate(c, want) {
   return score;
 }
 
+// Stable identity for a clip so the pipeline can dedup the SAME clip whether it
+// shows up under two queries or two scenes. Provider+id is stable across the two
+// resolutions a provider may hand back; url is the fallback.
+export function clipKey(c) {
+  return c && c.id != null ? `${c.provider}:${c.id}` : c?.url;
+}
+
+// Merge two score-sorted lists, alternating provider on score ties. Without this
+// a stable concat ([...pexels, ...pixabay]) keeps every tied Pexels clip ahead of
+// every Pixabay clip, so with a small per-query attempt budget Pixabay is never
+// reached. Alternating on ties keeps the ranking but balances the providers.
+// `startFromB` flips which provider wins a score tie at the head of the list, so
+// callers can rotate the lead provider across scenes and actually use both
+// sources instead of always leading with Pexels.
+export function interleaveByScore(a, b, orientation, startFromB = false, minDur = 0) {
+  const out = [];
+  let i = 0, j = 0, lastFromA = startFromB;
+  while (i < a.length || j < b.length) {
+    if (j >= b.length) { out.push(a[i++]); continue; }
+    if (i >= a.length) { out.push(b[j++]); continue; }
+    const sa = scoreCandidate(a[i], orientation, minDur);
+    const sb = scoreCandidate(b[j], orientation, minDur);
+    if (sa > sb) { out.push(a[i++]); lastFromA = true; }
+    else if (sb > sa) { out.push(b[j++]); lastFromA = false; }
+    else if (lastFromA) { out.push(b[j++]); lastFromA = false; }
+    else { out.push(a[i++]); lastFromA = true; }
+  }
+  return out;
+}
+
 /**
- * Return ALL candidate clips for a query, ranked best-first (Pexels + Pixabay).
- * The pipeline tries them in order so one bad/slow download can't kill a render.
+ * Return ALL candidate clips for a query, ranked best-first and provider-balanced
+ * (Pexels + Pixabay interleaved). The pipeline tries them in order so one
+ * bad/slow download can't kill a render, and so footage isn't all one source.
+ * `lead` ('pexels' | 'pixabay') picks which provider wins a score tie at the
+ * head — rotate it across scenes for genuine source variety. `minDur` biases
+ * toward clips long enough to cover the scene without looping.
  */
-export async function findClipCandidates(query, orientation) {
+export async function findClipCandidates(query, orientation, lead = 'pexels', minDur = 0) {
   const [p1, p2] = await Promise.all([
     searchPexels(query, orientation).catch(() => []),
     searchPixabay(query, orientation).catch(() => []),
   ]);
-  const all = [...p1, ...p2];
-  all.sort((a, b) => scoreCandidate(b, orientation) - scoreCandidate(a, orientation));
-  return all;
+  const byScore = (arr) =>
+    arr.slice().sort((a, b) => scoreCandidate(b, orientation, minDur) - scoreCandidate(a, orientation, minDur));
+  return interleaveByScore(byScore(p1), byScore(p2), orientation, lead === 'pixabay', minDur);
 }
 
 /**

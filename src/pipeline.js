@@ -2,7 +2,7 @@ import path from 'path';
 import { nanoid } from 'nanoid';
 import { config } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
-import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
+import { findClipCandidates, downloadClip, orientationFor, clipKey } from './stock.js';
 import { synthesizeVoice, synthesizeMany } from './voice.js';
 import { buildKaraokeAss, parseSrt } from './captions.js';
 import { getVoice } from './voices.js';
@@ -74,21 +74,27 @@ const CANDIDATES_PER_QUERY = 4;
  * query, downloading in order until one succeeds. Returns { path, clip, usedQuery }
  * or null if nothing could be downloaded.
  *
+ * `used` is a Set of clip keys claimed by THIS render (shared across scenes) so
+ * the same clip is never used twice — that's what kept producing repeated footage
+ * when several scenes' queries returned the same top-ranked clip. A clip is
+ * claimed the moment it's selected (before the await) so concurrent scenes don't
+ * race onto the same one. Defaults to a fresh per-call Set for standalone use.
+ *
  * `deps` is injectable so this is unit-testable without hitting the network.
  */
 export async function acquireFootage(
-  { queries, orientation, base, onAttempt },
+  { queries, orientation, base, onAttempt, used = new Set(), lead = 'pexels', minDur = 0 },
   deps = { findClipCandidates, downloadClip },
 ) {
-  const tried = new Set();
   for (const q of queries) {
     let candidates = [];
-    try { candidates = await deps.findClipCandidates(q, orientation); } catch { candidates = []; }
-    let used = 0;
+    try { candidates = await deps.findClipCandidates(q, orientation, lead, minDur); } catch { candidates = []; }
+    let attempts = 0;
     for (const clip of candidates) {
-      if (tried.has(clip.url) || used >= CANDIDATES_PER_QUERY) continue;
-      tried.add(clip.url);
-      used += 1;
+      const key = clipKey(clip);
+      if (used.has(key) || attempts >= CANDIDATES_PER_QUERY) continue;
+      used.add(key); // claim it now so a concurrent scene won't grab the same clip
+      attempts += 1;
       onAttempt && onAttempt(q, clip);
       try {
         const filePath = await deps.downloadClip(clip.url, base);
@@ -251,16 +257,23 @@ export function runPipeline(opts) {
       // 3+4. Footage + normalize per scene, with bounded concurrency (overlaps
       // network downloads with GPU encodes). One bad download can't kill the render.
       let done = 0;
+      // Shared across every scene of THIS render so no clip is reused — kills the
+      // repeated-footage problem when different scenes' queries overlap.
+      const usedClips = new Set();
       const sceneFiles = await mapLimit(plan.scenes, 3, async (scene, i) => {
         const base = `${id}_s${scene.index}`;
+        // Alternate the lead provider scene-to-scene so footage draws from both
+        // Pexels and Pixabay instead of always topping out on Pexels.
+        const lead = i % 2 === 0 ? 'pexels' : 'pixabay';
+        const minDur = durations[i]; // prefer a clip that covers the scene without looping
         let acquired = await acquireFootage({
-          queries: [scene.query], orientation, base,
+          queries: [scene.query], orientation, base, used: usedClips, lead, minDur,
           onAttempt: (q, clip) =>
             emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / n) * 55)),
         });
         if (!acquired) {
           const alts = await suggestAlternativeQueries(scene.query, context);
-          acquired = await acquireFootage({ queries: alts, orientation, base });
+          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur });
         }
         if (!acquired) throw new Error(`No usable footage for scene ${scene.index} ("${scene.query}")`);
         scene.usedQuery = acquired.usedQuery;

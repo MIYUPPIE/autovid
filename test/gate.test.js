@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { config, RESOLUTIONS } from '../src/config.js';
 import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES } from '../src/voices.js';
-import { orientationFor, scoreCandidate } from '../src/stock.js';
+import { orientationFor, scoreCandidate, interleaveByScore, clipKey } from '../src/stock.js';
 import { parseJsonLoose, splitScriptIntoScenes } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
@@ -94,6 +94,18 @@ test('stock: scoreCandidate penalizes over-long / oversized clips (download tax)
   const uhd = { width: 3840, height: 2160, duration: 10 };      // needless 4K bytes
   assert.ok(scoreCandidate(ideal, 'landscape') > scoreCandidate(veryLong, 'landscape'));
   assert.ok(scoreCandidate(ideal, 'landscape') > scoreCandidate(uhd, 'landscape'));
+});
+
+test('stock: scoreCandidate prefers a clip long enough to cover the scene (no loop)', () => {
+  // With a scene minDur, a clip that covers it must outrank one that would loop.
+  const covers = { width: 1920, height: 1080, duration: 12 };
+  const tooShort = { width: 1920, height: 1080, duration: 3 };
+  assert.ok(
+    scoreCandidate(covers, 'landscape', 10) > scoreCandidate(tooShort, 'landscape', 10),
+    'a clip covering the scene should beat one that loops',
+  );
+  // Without a minDur the bias is off (back-compat with the 2-arg callers).
+  assert.equal(scoreCandidate(covers, 'landscape'), scoreCandidate(covers, 'landscape', 0));
 });
 
 test('stock: scoreCandidate rewards adequate duration and resolution', () => {
@@ -441,6 +453,48 @@ test('footage: caps download attempts per query and never retries the same url',
   // 4 new candidates per query → q1 tries u0-u3, q2 skips those and tries u4-u7.
   assert.deepEqual(seen, ['u0', 'u1', 'u2', 'u3', 'u4', 'u5', 'u6', 'u7']);
   assert.equal(new Set(seen).size, seen.length, 'no url should be downloaded twice');
+});
+
+test('footage: a shared used-set stops two scenes reusing the same clip', async () => {
+  // Regression: each scene used its own "tried" set, so when two scenes' queries
+  // returned the same top-ranked clip both downloaded it → repeated footage.
+  const used = new Set();
+  const deps = {
+    findClipCandidates: async () => [clip('a'), clip('b'), clip('c')],
+    downloadClip: async (url) => `/raw/${url}.mp4`,
+  };
+  const s1 = await acquireFootage({ queries: ['q'], orientation: 'landscape', base: 's1', used }, deps);
+  const s2 = await acquireFootage({ queries: ['q'], orientation: 'landscape', base: 's2', used }, deps);
+  const s3 = await acquireFootage({ queries: ['q'], orientation: 'landscape', base: 's3', used }, deps);
+  assert.equal(s1.clip.url, 'a');
+  assert.equal(s2.clip.url, 'b', 'second scene must not reuse the first clip');
+  assert.equal(s3.clip.url, 'c', 'third scene must not reuse an earlier clip');
+});
+
+test('stock: clipKey is stable on provider+id, falls back to url', () => {
+  assert.equal(clipKey({ provider: 'pexels', id: 7, url: 'x' }), 'pexels:7');
+  assert.equal(clipKey({ provider: 'pixabay', url: 'y' }), 'y'); // no id
+});
+
+test('stock: equal-scored providers interleave so Pixabay is reachable', () => {
+  // Real bug: [...pexels, ...pixabay] stable-sorted kept all 15 tied Pexels clips
+  // ahead of every Pixabay clip; with a 4-attempt budget Pixabay was never tried.
+  const mk = (provider, n) => Array.from({ length: n }, (_, i) =>
+    ({ url: `${provider}${i}`, provider, width: 1920, height: 1080, duration: 8 }));
+  const ranked = interleaveByScore(mk('pexels', 8), mk('pixabay', 8), 'landscape');
+  assert.ok(
+    ranked.slice(0, 4).some((c) => c.provider === 'pixabay'),
+    'a Pixabay clip must appear within the per-query attempt budget',
+  );
+  // Higher score still wins over interleaving.
+  const better = { url: 'pb', provider: 'pixabay', width: 1920, height: 1080, duration: 8 };
+  const worse = { url: 'px', provider: 'pexels', width: 1920, height: 1080, duration: 50 };
+  assert.equal(interleaveByScore([worse], [better], 'landscape')[0].provider, 'pixabay');
+
+  // startFromB flips the lead on ties so a scene can prefer Pixabay first.
+  const pex = mk('pexels', 3), pix = mk('pixabay', 3);
+  assert.equal(interleaveByScore(pex, pix, 'landscape', false)[0].provider, 'pexels');
+  assert.equal(interleaveByScore(pex, pix, 'landscape', true)[0].provider, 'pixabay');
 });
 
 // ---------- HTTP contract ----------
