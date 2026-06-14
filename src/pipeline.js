@@ -192,9 +192,12 @@ export function runPipeline(opts) {
         master = { audioPath: m.audioPath, duration: m.duration };
         if (subtitles) {
           const assPath = path.join(config.dirs.audio, `${id}_vo.ass`);
-          // Edge gives real line timings (SRT) → karaoke within each line.
-          // YarnGPT gives none → karaoke timed proportionally across the audio.
-          const cues = m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null;
+          // Prefer real timing windows: YarnGPT returns per-chunk cues from the
+          // measured audio; edge gives a word-timed SRT. Only fall back to a
+          // proportional spread when neither is available.
+          const cues = m.cues?.length
+            ? m.cues
+            : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
           captionsPath = cues && cues.length
             ? buildKaraokeAss({ cues, aspect, assPath })
             : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath });

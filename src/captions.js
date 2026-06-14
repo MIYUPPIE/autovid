@@ -145,21 +145,25 @@ function escAss(text) {
 function assHeader({ w, h, fontSize, primary = '&H0000FFFF', secondary = '&H00FFFFFF' }) {
   const outline = Math.max(2, Math.round(fontSize * 0.08));
   const shadow = Math.max(0, Math.round(fontSize * 0.03));
-  const marginV = Math.round(h * 0.10);
+  const marginV = Math.round(h * 0.12);
+  const marginH = Math.round(w * 0.06); // keep text off the left/right edges
   return [
     '[Script Info]',
     'ScriptType: v4.00+',
-    'WrapStyle: 2',
+    'WrapStyle: 0', // smart-wrap long lines instead of letting them run off-screen
     'ScaledBorderAndShadow: yes',
     `PlayResX: ${w}`,
     `PlayResY: ${h}`,
     '',
     '[V4+ Styles]',
     'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
-    `Style: Default,DejaVu Sans,${fontSize},${primary},${secondary},&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,${outline},${shadow},2,40,40,${marginV},1`,
+    `Style: Default,DejaVu Sans,${fontSize},${primary},${secondary},&H00000000,&H64000000,1,0,0,0,100,100,0,0,1,${outline},${shadow},2,${marginH},${marginH},${marginV},1`,
     '',
     '[Events]',
-    'Format: Layer, Start, End, Style, MarginL, MarginR, Effect, Text',
+    // Must list all 10 V4+ event fields. The Dialogue lines below carry Name +
+    // three margins + Effect; a short Format here makes libass spill those
+    // values ("0,,") into the visible caption text.
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
   ].join('\n');
 }
 
@@ -186,8 +190,15 @@ export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath
   const words = cues ? wordsFromCues(cues) : wordsFromTextProportional(text, duration);
   if (words.length === 0) return null;
   const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
-  const fontSize = style.fontSize || Math.round(h * 0.052);
-  const lines = groupIntoLines(words, style);
+  // Size the font off WIDTH, not height: a height-based size blows up on 9:16
+  // vertical (narrow frame) and runs lines off-screen.
+  const fontSize = style.fontSize || Math.round(w * 0.058);
+  // Max chars that fit one line inside the horizontal margins (avg glyph ≈ 0.55em),
+  // so a line never overflows the frame. WrapStyle 0 catches anything left over.
+  const usable = w * 0.88;
+  const fitChars = Math.max(12, Math.floor(usable / (fontSize * 0.55)));
+  const grouping = { maxWords: style.maxWords || 6, maxChars: style.maxChars || fitChars };
+  const lines = groupIntoLines(words, grouping);
   const body = lines.map(lineToDialogue).join('\n');
   const ass = `${assHeader({ w, h, fontSize, ...style })}\n${body}\n`;
   fs.writeFileSync(assPath, ass, 'utf8');
