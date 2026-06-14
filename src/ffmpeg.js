@@ -61,13 +61,21 @@ function fitFilter({ w, h, fps, motion, index }) {
  * Normalize a raw clip to the target frame and exact duration, no audio.
  * Loops short clips, applies optional Ken Burns motion. Returns the silent file.
  */
-export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 30, motion = true, index = 0 }) {
+export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 30, motion = true, index = 0, trim = null }) {
   const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
   const out = path.join(config.dirs.work, `${outBase}_norm.mp4`);
   const srcDur = await probeDuration(input);
 
+  // Optional editor trim: take [in, out] from the source before fitting. After a
+  // trim the usable length is (out - in), so that, not the raw file, decides
+  // whether we still need to loop to cover targetDur.
+  const seek = trim && Number(trim.in) > 0 ? Number(trim.in) : 0;
+  const trimLen = trim && Number(trim.out) > seek ? Number(trim.out) - seek : (srcDur ? srcDur - seek : null);
+
   const args = [];
-  if (srcDur && srcDur < targetDur) args.push('-stream_loop', '-1'); // loop short clips
+  if (trimLen && trimLen < targetDur) args.push('-stream_loop', '-1'); // loop short/trimmed clips
+  else if (!trim && srcDur && srcDur < targetDur) args.push('-stream_loop', '-1');
+  if (seek > 0) args.push('-ss', seek.toFixed(3));
   args.push('-i', input, '-t', targetDur.toFixed(3), '-an',
     '-vf', fitFilter({ w, h, fps, motion, index }),
     ...(await videoCodecArgs()), '-pix_fmt', 'yuv420p', out);

@@ -18,7 +18,11 @@ import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
 } from '../src/captions.js';
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
+import { buildProject, saveProject } from '../src/project.js';
 import { app } from '../src/server.js';
+
+// Keep project-endpoint tests off the real assets dir.
+config.dirs.projects = fs.mkdtempSync(path.join(os.tmpdir(), 'av_gate_proj_'));
 
 // ---------- voices ----------
 test('voices: defaults follow the audience toggle', () => {
@@ -508,4 +512,79 @@ test('http: POST /api/render returns a STRING jobId (not {})', async () => {
   } finally {
     config.xaiKey = savedKey;
   }
+});
+
+// ---------- editable project endpoints ----------
+function sampleProject(id) {
+  const f = (n) => { const p = path.join(config.dirs.projects, n); fs.writeFileSync(p, 'x'); return p; };
+  fs.mkdirSync(config.dirs.projects, { recursive: true });
+  return buildProject({
+    id, opts: { topic: 't', fades: true, motion: true }, plan: { title: 'T' },
+    aspect: '16:9', fps: 30, language: 'English',
+    voiceTrack: { path: f(`${id}_vo.mp3`), duration: 8 },
+    captions: { enabled: true, cues: [{ start: 0, end: 8, text: 'hi there' }] },
+    music: null,
+    scenes: [
+      { index: 0, narration: 'hi', sourcePath: f(`${id}_s0.mp4`), clipPath: f(`${id}_s0n.mp4`), duration: 4, motion: true },
+      { index: 1, narration: 'there', sourcePath: f(`${id}_s1.mp4`), clipPath: f(`${id}_s1n.mp4`), duration: 4, motion: true },
+    ],
+  });
+}
+
+test('http: GET /api/project/:id is 404 for unknown, 200 + doc for known', async () => {
+  saveProject(sampleProject('http1'));
+  await withServer(async (base) => {
+    assert.equal((await fetch(`${base}/api/project/nope`)).status, 404);
+    const res = await fetch(`${base}/api/project/http1`);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.id, 'http1');
+    assert.equal(body.scenes.length, 2);
+  });
+});
+
+test('http: PUT /api/project/:id saves a valid edit and relayouts; rejects invalid', async () => {
+  const p = sampleProject('http2');
+  saveProject(p);
+  await withServer(async (base) => {
+    // Valid: trim scene 0 shorter → server relayouts scene 1's start.
+    p.scenes[0].duration = 2;
+    const ok = await fetch(`${base}/api/project/http2`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    });
+    assert.equal(ok.status, 200);
+    const saved = (await ok.json()).project;
+    assert.equal(saved.scenes[1].start, 2, 'server recomputed the timeline');
+
+    // Invalid: zero-duration scene → 400 with validation detail.
+    const bad = JSON.parse(JSON.stringify(p));
+    bad.scenes[0].duration = 0;
+    const res = await fetch(`${base}/api/project/http2`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bad),
+    });
+    assert.equal(res.status, 400);
+    assert.ok((await res.json()).error);
+
+    // Unknown id → 404.
+    assert.equal((await fetch(`${base}/api/project/nope`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
+    })).status, 404);
+  });
+});
+
+test('http: POST /api/project/:id/render is 404 for an unknown project', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/project/nope/render`, { method: 'POST' });
+    assert.equal(res.status, 404);
+  });
+});
+
+test('http: GET /api/projects lists saved projects', async () => {
+  saveProject(sampleProject('http3'));
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/projects`);
+    assert.equal(res.status, 200);
+    const ids = (await res.json()).projects.map((x) => x.id);
+    assert.ok(ids.includes('http3'));
+  });
 });

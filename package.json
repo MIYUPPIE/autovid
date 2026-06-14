@@ -8,9 +8,10 @@
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
     "check": "node src/check-env.js",
-    "test": "node --test test/gate.test.js",
+    "test": "node --test test/gate.test.js test/project.test.js",
     "eval": "node test/eval.js",
-    "eval:yarn": "node test/yarn.smoke.js"
+    "eval:yarn": "node test/yarn.smoke.js",
+    "eval:render": "node test/render.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",
