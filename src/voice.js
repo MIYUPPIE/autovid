@@ -34,11 +34,11 @@ export async function probeDuration(file) {
  *   yarn → mp3 via YarnGPT (no SRT; captions are karaoke-timed by the caller)
  * Returns { audioPath, srtPath|null, duration, engine }.
  */
-export async function synthesizeVoice({ text, voice, rate = '+0%', pitch = '+0Hz', outBase }) {
+export async function synthesizeVoice({ text, voice, rate = '+0%', pitch = '+0Hz', outBase, onProgress }) {
   const meta = getVoice(voice);
   const engine = meta?.engine || 'edge';
   if (engine === 'yarn') {
-    return synthYarn({ text, yarnVoice: meta.yarnVoice, rate, outBase });
+    return synthYarn({ text, yarnVoice: meta.yarnVoice, rate, outBase, onProgress });
   }
   return synthEdge({ text, voice, rate, pitch, outBase });
 }
@@ -95,19 +95,41 @@ export function chunkForYarn(text, max = config.yarnMaxChars) {
   return chunks;
 }
 
+// Run an async mapper over items with bounded concurrency, preserving order.
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return out;
+}
+
 // One YarnGPT request → mp3 bytes on disk. Throws with a clear message on
-// auth/quota/network failure so the pipeline surfaces it.
+// auth/quota/network/timeout failure so the pipeline surfaces it.
 async function yarnRequest({ text, yarnVoice, outPath }) {
   if (!config.yarnKey) throw new Error('YARN_API_KEY not set — required for Yoruba/Igbo/Hausa voices.');
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), config.yarnTimeoutMs);
   let res;
   try {
     res = await fetch(`${config.yarnBase}/tts`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: yarnVoice, response_format: 'mp3' }),
+      signal: ctrl.signal,
     });
   } catch (err) {
+    if (err.name === 'AbortError') {
+      throw new Error(`YarnGPT request timed out after ${Math.round(config.yarnTimeoutMs / 1000)}s.`);
+    }
     throw new Error(`YarnGPT request failed (network): ${err.message}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
     const body = await res.text().catch(() => '');
@@ -119,18 +141,33 @@ async function yarnRequest({ text, yarnVoice, outPath }) {
   return outPath;
 }
 
-async function synthYarn({ text, yarnVoice, rate, outBase }) {
+// Chars-per-chunk target: aim for ~yarnConcurrency sentence-aligned chunks so
+// one parallel wave covers the whole narration (YarnGPT serves ~4 at once).
+// Floor the size so we don't split mid-sentence on short text; cap at the hard
+// per-request limit so long narrations still respect the API.
+export function yarnChunkTarget(len, {
+  concurrency = config.yarnConcurrency,
+  min = config.yarnMinChunkChars,
+  max = config.yarnMaxChars,
+} = {}) {
+  return Math.min(max, Math.max(min, Math.ceil((len || 0) / Math.max(1, concurrency))));
+}
+
+async function synthYarn({ text, yarnVoice, rate, outBase, onProgress }) {
   const audioPath = path.join(config.dirs.audio, `${outBase}.mp3`);
-  const chunks = chunkForYarn(text);
+  const len = (text || '').replace(/\s+/g, ' ').trim().length;
+  const chunks = chunkForYarn(text, yarnChunkTarget(len));
   if (chunks.length === 0) throw new Error('YarnGPT: empty narration text.');
 
-  // Synthesize each chunk, then concat (re-encode) into one mp3.
-  const parts = [];
-  for (let i = 0; i < chunks.length; i++) {
+  // Synthesize chunks concurrently (bounded), preserving order, then concat.
+  let done = 0;
+  onProgress && onProgress(0, chunks.length);
+  const parts = await mapLimit(chunks, config.yarnConcurrency, async (chunk, i) => {
     const part = path.join(config.dirs.audio, `${outBase}_y${i}.mp3`);
-    await yarnRequest({ text: chunks[i], yarnVoice, outPath: part });
-    parts.push(part);
-  }
+    await yarnRequest({ text: chunk, yarnVoice, outPath: part });
+    onProgress && onProgress(++done, chunks.length);
+    return part;
+  });
 
   const tempo = rateToTempo(rate);
   const af = tempo !== 1 ? ['-filter:a', `atempo=${tempo.toFixed(3)}`] : [];

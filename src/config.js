@@ -30,6 +30,15 @@ export const config = {
   yarnBase: process.env.YARN_BASE || 'https://yarngpt.ai/api/v1',
   // Max characters per YarnGPT request (their hard cap is 2000; stay under it).
   yarnMaxChars: parseInt(process.env.YARN_MAX_CHARS || '1800', 10),
+  // YarnGPT is slow (~0.2s/char) but serves a SMALL parallel pool. Measured:
+  // 4 concurrent requests finish together (~9s); 8 overwhelm it (~125s). So we
+  // split the narration into ~yarnConcurrency sentence-aligned chunks and run
+  // them in one parallel wave. yarnMinChunkChars floors the size so we don't
+  // split mid-sentence on short text. Cuts a 60s single call to ~15-30s.
+  yarnConcurrency: parseInt(process.env.YARN_CONCURRENCY || '4', 10),
+  yarnMinChunkChars: parseInt(process.env.YARN_MIN_CHUNK_CHARS || '100', 10),
+  // Per-request timeout so a stalled chunk can't hang the whole render.
+  yarnTimeoutMs: parseInt(process.env.YARN_TIMEOUT_MS || '180000', 10),
   maxClips: parseInt(process.env.MAX_CLIPS || '12', 10),
   downloadTimeout: parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000', 10),
   // Skip clips bigger than this — we only use a few seconds, so a 75MB source is
