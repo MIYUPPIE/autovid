@@ -67,6 +67,13 @@ The active provider shows in `/api/health` and the UI header.
 - `JAMENDO_CLIENT_ID` — from https://devportal.jamendo.com (free, ~2-min signup) — enables auto background music. Without it, auto-music is skipped (upload still works).
 - `YARN_API_KEY` — from https://yarngpt.ai — enables the Yoruba/Igbo/Hausa voices. Only needed if you use those languages.
 
+## YouTube footage (no key)
+Install `yt-dlp` (`pip install yt-dlp`) and the app gains a third footage source — no API key. When detected:
+- **Create form** shows a "▶️ Use YouTube footage too" toggle. On → the auto-pipeline can pull scene footage from YouTube as well as Pexels/Pixabay (stock is still preferred; YouTube is the opt-in extra).
+- **Editor → Replace footage → "⛶ Browse all clips"** opens a full-size gallery with **Pexels / Pixabay / YouTube** tabs so you can see every searched clip and click one to swap it onto the selected scene.
+
+Only a short opening section of each YouTube video is downloaded (`YOUTUBE_SECTION_SECONDS`, default 30s) and trimmed to the scene, so a 30-minute source is a ~2MB pull. Mind copyright/licensing on whatever you reuse.
+
 ## How it fits together
 ```
  Topic ─► xai.js (Grok) ─► scene plan {narration (in language), query (English), duration}

@@ -16,7 +16,8 @@
     "eval:beats": "node test/beats.smoke.js",
     "eval:cards": "node test/cards.smoke.js",
     "eval:transitions": "node test/transitions.smoke.js",
-    "eval:transcribe": "node test/transcribe.smoke.js"
+    "eval:transcribe": "node test/transcribe.smoke.js",
+    "eval:youtube": "node test/youtube.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",

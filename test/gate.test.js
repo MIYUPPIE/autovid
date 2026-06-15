@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { config, RESOLUTIONS } from '../src/config.js';
 import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES, edgeVoiceName } from '../src/voices.js';
-import { orientationFor, scoreCandidate, interleaveByScore, clipKey, localizeQuery } from '../src/stock.js';
+import { orientationFor, scoreCandidate, interleaveByScore, clipKey, localizeQuery, isYouTubeUrl } from '../src/stock.js';
 import { parseJsonLoose, splitScriptIntoScenes, languageNote } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
@@ -20,7 +20,7 @@ import {
 } from '../src/captions.js';
 import { normalizeBrand, DEFAULT_BRAND } from '../src/brand.js';
 import { buildXfadeGraph, TRANSITIONS, nearestAspect } from '../src/ffmpeg.js';
-import { transcriptText, highlightWindows, pickTopWindows, windowCues } from '../src/transcribe.js';
+import { transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from '../src/transcribe.js';
 import { buildDubPrompt, cleanDubText } from '../src/dub.js';
 import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
@@ -640,6 +640,34 @@ test('stock: equal-scored providers interleave so Pixabay is reachable', () => {
   assert.equal(interleaveByScore(pex, pix, 'landscape', true)[0].provider, 'pixabay');
 });
 
+test('stock: isYouTubeUrl recognizes watch/share/shorts/embed, rejects stock CDNs', () => {
+  for (const u of [
+    'https://www.youtube.com/watch?v=abc123',
+    'https://youtube.com/watch?v=abc123&t=10',
+    'https://youtu.be/abc123',
+    'https://www.youtube.com/shorts/abc123',
+    'https://www.youtube.com/embed/abc123',
+  ]) assert.ok(isYouTubeUrl(u), `should match: ${u}`);
+  for (const u of [
+    'https://player.vimeo.com/video/123.mp4',
+    'https://videos.pexels.com/video-files/123/abc.mp4',
+    'https://cdn.pixabay.com/vimeo/123/clip.mp4',
+    '',
+    null,
+  ]) assert.ok(!isYouTubeUrl(u), `should NOT match: ${u}`);
+});
+
+test('stock: a YouTube candidate merges in behind equal-scored stock (stock preferred)', () => {
+  // YouTube has no width/height from a flat search, so it scores below a well-shaped
+  // stock clip — and findClipCandidates merges it AFTER the stock pool. Mirror that
+  // ordering here via the same interleave the function uses for the YT pass.
+  const stock = { url: 'pexels0', provider: 'pexels', width: 1920, height: 1080, duration: 8 };
+  const yt = { url: 'https://youtu.be/x', provider: 'youtube', width: 0, height: 0, duration: 600 };
+  const merged = interleaveByScore([stock], [yt], 'landscape', false);
+  assert.equal(merged[0].provider, 'pexels', 'shaped stock clip outranks a raw YouTube hit');
+  assert.equal(merged[1].provider, 'youtube');
+});
+
 // ---------- share kit (share.js, pure) ----------
 test('share: hashtags drop stopwords/short tokens, add aspect tags, dedupe, cap', () => {
   const tags = buildHashtags({ title: 'How to Cook the Best Jollof Rice', aspect: '9:16' });
@@ -905,6 +933,32 @@ test('shorts: windowCues clips + retimes captions to the window start', () => {
   assert.equal(cues[0].start, 2, '22-20 → 2s into the window');
   assert.equal(cues[0].text, 'inside one');
   assert.ok(cues.every((c) => c.end > c.start && c.start >= 0));
+});
+
+test('shorts: windowWordCues emits exact per-word cues, clipped + retimed to the window', () => {
+  const segs = [
+    { start: 5, end: 8, text: 'before', words: [{ start: 5, end: 8, text: 'before' }] },
+    {
+      start: 22, end: 28, text: 'inside one two',
+      words: [
+        { start: 22, end: 23, text: 'inside' },
+        { start: 24, end: 25, text: 'one' },
+        { start: 26, end: 27, text: 'two' },
+      ],
+    },
+    { start: 65, end: 70, text: 'after', words: [{ start: 65, end: 70, text: 'after' }] },
+  ];
+  const cues = windowWordCues(segs, 20, 30);
+  assert.equal(cues.length, 3, 'only the three words inside [20,30]');
+  assert.deepEqual(cues.map((c) => c.text), ['inside', 'one', 'two']);
+  assert.equal(cues[0].start, 2, '22-20 → 2s into the window');
+  assert.equal(cues[1].start, 4, '24-20 → 4s');
+  assert.ok(cues.every((c) => c.end > c.start && c.start >= 0));
+});
+
+test('shorts: windowWordCues returns [] when no word timing exists (caller falls back)', () => {
+  const segs = [{ start: 22, end: 25, text: 'no words here' }];
+  assert.deepEqual(windowWordCues(segs, 20, 30), []);
 });
 
 test('dub: buildDubPrompt targets the language and reuses its TTS rules; cleanDubText strips wrappers', () => {
