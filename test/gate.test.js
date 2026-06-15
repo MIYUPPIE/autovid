@@ -19,7 +19,7 @@ import {
   captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS, hexToAss,
 } from '../src/captions.js';
 import { normalizeBrand, DEFAULT_BRAND } from '../src/brand.js';
-import { buildXfadeGraph, TRANSITIONS, nearestAspect } from '../src/ffmpeg.js';
+import { buildXfadeGraph, TRANSITIONS, nearestAspect, logoOverlayXY } from '../src/ffmpeg.js';
 import { transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from '../src/transcribe.js';
 import { buildDubPrompt, cleanDubText } from '../src/dub.js';
 import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
@@ -879,6 +879,37 @@ test('brand: normalizeBrand validates colours, clamps durations, keeps shape', (
   assert.equal(b.outro.enabled, true, 'truthy enabled coerced');
   // Empty input → safe defaults.
   assert.deepEqual(normalizeBrand({}).cardColors, DEFAULT_BRAND.cardColors);
+});
+
+test('brand: normalizeBrand validates logo position + clamps logo scale', () => {
+  // Defaults when absent.
+  const def = normalizeBrand({});
+  assert.equal(def.logoPosition, 'br');
+  assert.equal(def.logoScale, 0.12);
+  // Valid position kept; bad one → default.
+  assert.equal(normalizeBrand({ logoPosition: 'tl' }).logoPosition, 'tl');
+  assert.equal(normalizeBrand({ logoPosition: 'middle' }).logoPosition, 'br');
+  // Scale clamps to [0.04, 0.4].
+  assert.equal(normalizeBrand({ logoScale: 0.25 }).logoScale, 0.25);
+  assert.equal(normalizeBrand({ logoScale: 5 }).logoScale, 0.4);
+  assert.equal(normalizeBrand({ logoScale: 0 }).logoScale, 0.04);
+  assert.equal(normalizeBrand({ logoScale: 'big' }).logoScale, 0.12, 'non-number → default');
+});
+
+test('ffmpeg: logoOverlayXY anchors the watermark at every corner/edge/center', () => {
+  const m = 30;
+  // Corners.
+  assert.equal(logoOverlayXY('tl', m), '30:30');
+  assert.equal(logoOverlayXY('tr', m), 'W-w-30:30');
+  assert.equal(logoOverlayXY('bl', m), '30:H-h-30');
+  assert.equal(logoOverlayXY('br', m), 'W-w-30:H-h-30'); // legacy default
+  // Edges + center use the (W-w)/2 / (H-h)/2 midpoints.
+  assert.equal(logoOverlayXY('tc', m), '(W-w)/2:30');
+  assert.equal(logoOverlayXY('mc', m), '(W-w)/2:(H-h)/2');
+  assert.equal(logoOverlayXY('mr', m), 'W-w-30:(H-h)/2');
+  assert.equal(logoOverlayXY('bc', m), '(W-w)/2:H-h-30');
+  // Unknown falls back to bottom-right (matches the pre-feature behaviour).
+  assert.equal(logoOverlayXY('', m), 'W-w-30:H-h-30');
 });
 
 test('captions: hexToAss converts #RRGGBB to ASS BGR, rejects junk', () => {

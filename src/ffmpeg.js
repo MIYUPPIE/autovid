@@ -376,9 +376,20 @@ export async function extractWaveform({ input, buckets = 800 }) {
  * Single final pass: lay the ONE continuous narration over the silent video,
  * mix ducked background music, burn subtitles, add fades. Returns final mp4.
  */
+// Map a 9-point anchor (tl..br) + margin to an ffmpeg overlay x:y expression.
+// `w`/`h` are the logo's own dims in overlay syntax; `W`/`H` are the frame's.
+export function logoOverlayXY(position, margin) {
+  const p = String(position || 'br');
+  const col = p[1] || 'r'; // l | c | r
+  const row = p[0] || 'b'; // t | m | b
+  const x = col === 'l' ? `${margin}` : col === 'c' ? '(W-w)/2' : `W-w-${margin}`;
+  const y = row === 't' ? `${margin}` : row === 'm' ? '(H-h)/2' : `H-h-${margin}`;
+  return `${x}:${y}`;
+}
+
 export async function finalizeVideo({
   silentVideo, voiceAudio, captions = null, bgMusic = null, musicVolume = 0.12,
-  aspect, fades = true, outName, logo = null,
+  aspect, fades = true, outName, logo = null, logoPosition = 'br', logoScale = 0.12,
 }) {
   const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
   const out = path.join(config.dirs.output, outName);
@@ -412,16 +423,17 @@ export async function finalizeVideo({
     aMap = '[aout]';
   }
 
-  // Logo watermark (#10): overlay the brand logo, scaled to ~12% width, in the
-  // bottom-right with a small margin. Added as the last input so audio indices
-  // above are untouched.
+  // Logo watermark (#10): overlay the brand logo, scaled to logoScale of the frame
+  // width, at the chosen anchor with a small margin. Added as the last input so
+  // audio indices above are untouched.
   if (hasLogo) {
     const logoIdx = (bgMusic && fs.existsSync(bgMusic)) ? 3 : 2;
     inputs.push('-i', logo);
-    const lw = Math.round(w * 0.12);
+    const scale = Math.max(0.04, Math.min(0.4, Number(logoScale) || 0.12));
+    const lw = Math.round(w * scale);
     const margin = Math.round(w * 0.03);
     parts.push(`[${logoIdx}:v]scale=${lw}:-1[lg]`);
-    parts.push(`[vbase][lg]overlay=W-w-${margin}:H-h-${margin}[vout]`);
+    parts.push(`[vbase][lg]overlay=${logoOverlayXY(logoPosition, margin)}[vout]`);
   }
 
   const args = [...inputs, '-filter_complex', parts.join(';'),

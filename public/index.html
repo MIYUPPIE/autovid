@@ -135,6 +135,13 @@
     background:rgba(255,255,255,.025);transition:border-color .15s,box-shadow .15s,background .15s;
     outline:none}
   input::placeholder,textarea::placeholder{color:var(--faint)}
+  /* color pickers must not inherit the full-width text-input box, or the swatch
+     is clipped behind a translucent panel and looks blank ("color not showing"). */
+  input[type=color]{width:48px;height:36px;padding:3px;background:none;border:1px solid var(--border);
+    border-radius:8px;cursor:pointer;flex:0 0 auto}
+  input[type=color]::-webkit-color-swatch-wrapper{padding:0}
+  input[type=color]::-webkit-color-swatch{border:none;border-radius:5px}
+  input[type=color]::-moz-color-swatch{border:none;border-radius:5px}
   input:focus,select:focus,textarea:focus{border-color:var(--brand-1);box-shadow:var(--ring);
     background:rgba(255,255,255,.04)}
   select{appearance:none;cursor:pointer;
@@ -821,10 +828,23 @@
     <div class="panel">
       <label>Brand name</label>
       <input id="brName" placeholder="Your channel / studio name">
-      <label>Logo (watermarked bottom-right)</label>
+      <label>Logo watermark</label>
       <input type="file" id="brLogo" accept="image/*">
       <div class="muted" id="brLogoStatus"></div>
-      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px">
+      <div id="brLogoOpts" style="display:none;margin-top:12px">
+        <div style="display:flex;gap:22px;flex-wrap:wrap;align-items:flex-start">
+          <div>
+            <small style="display:block;color:var(--muted);margin-bottom:6px;font-weight:600">Position</small>
+            <div id="brLogoGrid" style="display:grid;grid-template-columns:repeat(3,22px);grid-auto-rows:22px;gap:5px"></div>
+          </div>
+          <div style="flex:1;min-width:160px">
+            <small style="display:block;color:var(--muted);margin-bottom:6px;font-weight:600">Size <span id="brLogoSizeLbl" style="font-weight:400">12%</span></small>
+            <input type="range" id="brLogoSize" min="4" max="40" step="1" value="12">
+            <div class="muted" style="margin-top:6px">% of video width</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:14px">
         <div><label>Caption — spoken</label><input type="color" id="brCapP" value="#ffd23f"></div>
         <div><label>Caption — upcoming</label><input type="color" id="brCapS" value="#ffffff"></div>
         <div><label>Card top</label><input type="color" id="brCard0" value="#1a1206"></div>
@@ -1321,17 +1341,31 @@ E('sw-brIntro').closest('.tog').addEventListener('click',()=>{const on=E('sw-brI
 E('sw-brOutro').closest('.tog').addEventListener('click',()=>{const on=E('sw-brOutro').classList.toggle('on');E('brOutroRow').style.display=on?'block':'none';});
 E('brIntroSec').addEventListener('input',e=>E('brIntroLbl').textContent=(+e.target.value).toFixed(1)+'s');
 E('brOutroSec').addEventListener('input',e=>E('brOutroLbl').textContent=(+e.target.value).toFixed(1)+'s');
-let brandLogoPath=null;
+let brandLogoPath=null, brandLogoPos='br';
+const LOGO_POS=['tl','tc','tr','ml','mc','mr','bl','bc','br'];
+const LOGO_POS_LABEL={tl:'Top left',tc:'Top center',tr:'Top right',ml:'Middle left',mc:'Center',mr:'Middle right',bl:'Bottom left',bc:'Bottom center',br:'Bottom right'};
+// 3×3 anchor grid — the lit cell is the corner/edge the logo sits at.
+function renderLogoGrid(){
+  const g=E('brLogoGrid');
+  g.innerHTML=LOGO_POS.map(p=>`<button type="button" data-p="${p}" title="${LOGO_POS_LABEL[p]}" style="border:1px solid var(--border-2);background:${p===brandLogoPos?'var(--grad)':'var(--card-2)'};border-radius:5px;cursor:pointer;padding:0"></button>`).join('');
+  g.querySelectorAll('button').forEach(btn=>btn.addEventListener('click',()=>{ brandLogoPos=btn.dataset.p; renderLogoGrid(); }));
+}
+// Logo controls only matter once a logo exists.
+function showLogoOpts(on){ E('brLogoOpts').style.display=on?'block':'none'; }
+E('brLogoSize').addEventListener('input',e=>E('brLogoSizeLbl').textContent=e.target.value+'%');
 E('brLogo').addEventListener('change',async e=>{
   const f=e.target.files[0]; if(!f)return; E('brLogoStatus').textContent='Uploading…';
   const ext=(f.name.split('.').pop()||'png'); const buf=await f.arrayBuffer();
   const r=await fetch('/api/logo?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf});
-  const d=await r.json(); if(d.path){brandLogoPath=d.path;E('brLogoStatus').textContent='✓ '+f.name;} else E('brLogoStatus').textContent='Upload failed';
+  const d=await r.json(); if(d.path){brandLogoPath=d.path;E('brLogoStatus').textContent='✓ '+f.name; showLogoOpts(true); renderLogoGrid();} else E('brLogoStatus').textContent='Upload failed';
 });
 async function openBrand(){
   const b=await (await fetch('/api/brand')).json();
   E('brName').value=b.name||''; brandLogoPath=b.logoPath||null;
   E('brLogoStatus').textContent=b.logoPath?'✓ logo set':'';
+  brandLogoPos=b.logoPosition||'br';
+  E('brLogoSize').value=Math.round((b.logoScale||0.12)*100); E('brLogoSizeLbl').textContent=Math.round((b.logoScale||0.12)*100)+'%';
+  showLogoOpts(!!b.logoPath); renderLogoGrid();
   E('brCapP').value=b.captionPrimary||'#ffd23f'; E('brCapS').value=b.captionSecondary||'#ffffff';
   E('brCard0').value=(b.cardColors&&b.cardColors[0])||'#1a1206'; E('brCard1').value=(b.cardColors&&b.cardColors[1])||'#3a2a0c';
   E('sw-brIntro').classList.toggle('on',!!b.intro.enabled); E('brIntroRow').style.display=b.intro.enabled?'block':'none';
@@ -1342,6 +1376,7 @@ async function openBrand(){
 }
 E('brSave').addEventListener('click',async ()=>{
   const body={ name:E('brName').value, logoPath:brandLogoPath,
+    logoPosition:brandLogoPos, logoScale:(+E('brLogoSize').value)/100,
     captionPrimary:E('brCapP').value, captionSecondary:E('brCapS').value,
     cardColors:[E('brCard0').value,E('brCard1').value],
     intro:{enabled:E('sw-brIntro').classList.contains('on'),text:E('brIntroText').value,seconds:+E('brIntroSec').value},
