@@ -75,25 +75,32 @@ function fitFilter({ w, h, fps, motion, index }) {
 
 /**
  * Normalize a raw clip to the target frame and exact duration, no audio.
- * Loops short clips, applies optional Ken Burns motion. Returns the silent file.
+ * Short clips are looped (stock B-roll) OR, when `freeze` is set, played once and
+ * held on their last frame (a dub/source video: looping a real shot under one
+ * continuous voiceover looks broken). Applies optional Ken Burns motion. Returns
+ * the silent file.
  */
-export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 30, motion = true, index = 0, trim = null }) {
+export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 30, motion = true, index = 0, trim = null, freeze = false }) {
   const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
   const out = path.join(config.dirs.work, `${outBase}_norm.mp4`);
   const srcDur = await probeDuration(input);
 
   // Optional editor trim: take [in, out] from the source before fitting. After a
   // trim the usable length is (out - in), so that, not the raw file, decides
-  // whether we still need to loop to cover targetDur.
+  // whether we still need to loop/hold to cover targetDur.
   const seek = trim && Number(trim.in) > 0 ? Number(trim.in) : 0;
   const trimLen = trim && Number(trim.out) > seek ? Number(trim.out) - seek : (srcDur ? srcDur - seek : null);
+  const short = trimLen != null && trimLen < targetDur;
 
   const args = [];
-  if (trimLen && trimLen < targetDur) args.push('-stream_loop', '-1'); // loop short/trimmed clips
-  else if (!trim && srcDur && srcDur < targetDur) args.push('-stream_loop', '-1');
+  if (short && !freeze) args.push('-stream_loop', '-1'); // loop short/trimmed stock clips
   if (seek > 0) args.push('-ss', seek.toFixed(3));
+  let vf = fitFilter({ w, h, fps, motion, index });
+  // freeze: clone the final frame to fill the rest of targetDur instead of
+  // looping; `-t` below caps the held tail. Cheap and never restarts the shot.
+  if (short && freeze) vf += ',tpad=stop=-1:stop_mode=clone';
   args.push('-i', input, '-t', targetDur.toFixed(3), '-an',
-    '-vf', fitFilter({ w, h, fps, motion, index }),
+    '-vf', vf,
     ...(await videoCodecArgs()), '-pix_fmt', 'yuv420p', out);
 
   await ffmpeg(args, 'normalizeClip');

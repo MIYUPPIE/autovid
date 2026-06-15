@@ -66,6 +66,7 @@ export async function renderProject(project, { onProgress } = {}) {
       motion: scene.motion,
       index: scene.index,
       trim: scene.trim,
+      freeze: scene.freeze,
     });
     scene.clip = { path: out };
   }
