@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -e
-echo "==> AutoVid setup"
+echo "==> GriotVid setup"
 
 # System deps
 if ! command -v ffmpeg >/dev/null; then

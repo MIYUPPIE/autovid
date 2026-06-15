@@ -15,7 +15,7 @@ async function check(name, fn) {
   }
 }
 
-console.log('\nAutoVid environment check\n');
+console.log('\nGriotVid environment check\n');
 await check('ffmpeg', async () => (await execFileP('ffmpeg', ['-version'])).stdout.split('\n')[0]);
 await check('ffprobe', async () => (await execFileP('ffprobe', ['-version'])).stdout.split('\n')[0]);
 await check('edge-tts', async () => {

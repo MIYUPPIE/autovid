@@ -1,4 +1,7 @@
-# AutoVid — AI Video Pipeline
+# GriotVid — AI Video Studio
+
+*A griot is a West African storyteller. GriotVid turns an idea into a finished, narrated video — in your language.*
+
 
 AI writes the script and scene plan **in your chosen language** → free stock footage is pulled from **Pexels + Pixabay** → a neural voiceover is generated as **one continuous narration** (Edge-TTS for English/African languages, **YarnGPT** for Yoruba/Igbo/Hausa) → royalty-free **background music auto-picked from Jamendo** by mood → **FFmpeg** fits footage to the narration with **Ken Burns motion**, burns **word-by-word karaoke captions**, ducks the music, and renders a final MP4 on the **GPU (NVENC)**. Driven from a web UI.
 

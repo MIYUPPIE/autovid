@@ -5,7 +5,7 @@ import { config } from './config.js';
 
 const execFileP = promisify(execFile);
 
-// All of Grok's job in AutoVid is plain chat-completions returning JSON. Both
+// All of Grok's job in GriotVid is plain chat-completions returning JSON. Both
 // xAI and OpenRouter are OpenAI-compatible, so they share one client; local
 // Claude Code is shelled out. Switch with LLM_PROVIDER in .env.
 async function openaiCompatChat({ base, key, model, messages, temperature = 0.7, jsonMode = false, extraHeaders = {} }) {
@@ -54,7 +54,7 @@ export async function llmChat(messages, opts = {}) {
     return openaiCompatChat({
       base: config.openrouterBase, key: config.openrouterKey, model: config.openrouterModel,
       messages, ...opts,
-      extraHeaders: { 'HTTP-Referer': 'http://localhost:3000', 'X-Title': 'AutoVid' },
+      extraHeaders: { 'HTTP-Referer': 'http://localhost:3000', 'X-Title': 'GriotVid' },
     });
   }
   if (provider === 'claude-code') {
