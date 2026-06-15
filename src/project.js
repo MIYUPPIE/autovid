@@ -95,6 +95,7 @@ export function buildProject(parts) {
     effects: {
       fades: opts.fades !== false,
       motion: opts.motion !== false,
+      transition: opts.transition || 'cut',   // scene crossfade (#8): cut|fade|slideleft|…
     },
     audio: {
       voiceTrack: { path: voiceTrack?.path || null, duration: voiceTrack?.duration || 0 },
@@ -165,6 +166,9 @@ export function planRender(p, prev = {}) {
     const h = hashOf({
       source: s.source?.path, card: s.card, duration: s.duration, motion: s.motion,
       trim: s.trim, aspect: p.aspect, fps: p.fps,
+      // Transitions render each clip longer (xfade headroom), so the normalized
+      // clip depends on the chosen transition too.
+      transition: p.effects?.transition || 'cut',
     });
     sceneHashes[s.index] = h;
     // Stale if the inputs changed OR the cached normalized clip is gone.

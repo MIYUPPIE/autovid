@@ -8,7 +8,7 @@ import { buildKaraokeAss, parseSrt } from './captions.js';
 import { getVoice } from './voices.js';
 import fs from 'fs';
 import { autoMusic } from './music.js';
-import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack, makeTextCard } from './ffmpeg.js';
+import { normalizeClip, concatSilent, concatWithTransitions, finalizeVideo, assembleVoiceTrack, makeTextCard } from './ffmpeg.js';
 import { buildProject, saveProject, planRender, loadProject } from './project.js';
 import { renderProject } from './render.js';
 import { detectTempo, beatGrid, snapToBeats } from './beats.js';
@@ -206,7 +206,11 @@ export function runPipeline(opts) {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
         captionStyle = {}, codeSwitch = false, beatSync = true, bRoll = true,
+        transition = 'cut',
       } = opts;
+      // Crossfade headroom: with transitions on, each scene clip is rendered this
+      // much longer so the xfade overlap nets back to the intended cut times.
+      const xfadeDur = transition && transition !== 'cut' ? config.transitionSeconds : 0;
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
       const hasScript = Boolean(script && script.trim());
@@ -366,7 +370,7 @@ export function runPipeline(opts) {
           const card = { narration: scene.narration, query: scene.query };
           const norm = await makeTextCard({
             narration: card.narration, query: card.query, outBase: base,
-            aspect, targetDur: durations[i], index: i,
+            aspect, targetDur: durations[i] + xfadeDur, index: i,
           });
           scene.usedQuery = scene.query;
           scene.provider = 'card';
@@ -378,7 +382,7 @@ export function runPipeline(opts) {
         scene.provider = acquired.clip.provider;
 
         const norm = await normalizeClip({
-          input: acquired.path, outBase: base, aspect, targetDur: durations[i], motion, index: i,
+          input: acquired.path, outBase: base, aspect, targetDur: durations[i] + xfadeDur, motion, index: i,
         });
         done += 1;
         emit(job, 'editing', `Shot ${scene.index}/${vn} ready (${acquired.clip.provider})`, 20 + Math.round((done / vn) * 55));
@@ -387,9 +391,13 @@ export function runPipeline(opts) {
         return { norm, source: acquired.path };
       });
 
-      // 5. Concatenate the silent scene clips (stream-copy, fast)
-      emit(job, 'render', 'Stitching scenes…', 80);
-      const silent = await concatSilent({ sceneFiles: sceneFiles.map((r) => r.norm), outBase: id });
+      // 5. Stitch the silent scene clips: a hard-cut stream-copy (fast), or an
+      // xfade crossfade when a transition is chosen (#8).
+      emit(job, 'render', xfadeDur ? `Stitching scenes with ${transition}…` : 'Stitching scenes…', 80);
+      const normFiles = sceneFiles.map((r) => r.norm);
+      const silent = xfadeDur
+        ? await concatWithTransitions({ sceneFiles: normFiles, clipDurs: durations.map((d) => d + xfadeDur), outBase: id, transition, dur: xfadeDur })
+        : await concatSilent({ sceneFiles: normFiles, outBase: id });
 
       // 7. Single final pass: narration + ducked music + subtitles + fades
       emit(job, 'render', 'Mixing audio and rendering final video…', 90);

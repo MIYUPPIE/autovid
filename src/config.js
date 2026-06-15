@@ -62,6 +62,9 @@ export const config = {
   // Per-phrase B-roll (#7): a scene longer than this many seconds is split into
   // multiple short shots so the picture changes more often (modern pacing).
   maxShotSeconds: parseInt(process.env.MAX_SHOT_SECONDS || '6', 10),
+  // Scene transition crossfade length (#8). Each scene clip is normalized this
+  // many seconds longer so the xfade overlap nets back to the intended cut times.
+  transitionSeconds: parseFloat(process.env.TRANSITION_SECONDS || '0.4'),
 
   dirs: {
     raw: path.join(ROOT, 'assets', 'raw'),

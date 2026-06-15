@@ -16,8 +16,9 @@ import { activeLlm, llmChat } from '../src/llm.js';
 import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
 import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
-  captionScale, CAPTION_SIZES,
+  captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS,
 } from '../src/captions.js';
+import { buildXfadeGraph, TRANSITIONS } from '../src/ffmpeg.js';
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
@@ -803,6 +804,50 @@ test('cards: palette cycles by index, honors a brand override, width by aspect',
   assert.deepEqual(cardPalette(-1), CARD_PALETTES[CARD_PALETTES.length - 1], 'negative index safe');
   assert.deepEqual(cardPalette(2, { cardColors: ['#fff', '#000'] }), ['#fff', '#000'], 'brand overrides');
   assert.ok(cardWrapWidth('9:16') < cardWrapWidth('16:9'), 'portrait wraps sooner');
+});
+
+// ---------- transitions + caption animations (#8) ----------
+test('captions: captionAnimTag returns an ASS override per preset, empty otherwise', () => {
+  assert.equal(captionAnimTag({}), '');
+  assert.equal(captionAnimTag({ captionAnim: 'none' }), '');
+  assert.equal(captionAnimTag({ captionAnim: 'bogus' }), '');
+  assert.match(captionAnimTag({ captionAnim: 'fade' }), /\\fad\(/);
+  assert.match(captionAnimTag({ captionAnim: 'pop' }), /\\t\(/);
+  assert.match(captionAnimTag({ captionAnim: 'pop' }), /\\fscx/);
+  assert.ok(CAPTION_ANIMS.includes('fade') && CAPTION_ANIMS.includes('pop'));
+});
+
+test('captions: buildKaraokeAss injects the animation override before the karaoke run', () => {
+  const assPath = path.join(os.tmpdir(), `av_anim_${Date.now()}.ass`);
+  buildKaraokeAss({ cues: [{ start: 0, end: 3, text: 'hello there' }], aspect: '16:9', assPath, style: { captionAnim: 'fade' } });
+  const dlg = fs.readFileSync(assPath, 'utf8').split('\n').filter((l) => l.startsWith('Dialogue:'));
+  fs.unlinkSync(assPath);
+  for (const d of dlg) {
+    const text = d.replace('Dialogue:', '').split(',').slice(9).join(',');
+    assert.ok(text.startsWith('{\\fad('), `line animates in: ${text.slice(0, 16)}`);
+    assert.ok(text.includes('{\\k'), 'karaoke timing still present after the animation tag');
+  }
+});
+
+test('transitions: buildXfadeGraph chains xfades with correct overlapping offsets', () => {
+  // Three clips, each extended to 5s, 0.4s crossfade.
+  const { filter, label, totalDur } = buildXfadeGraph([5, 5, 5], { transition: 'fade', dur: 0.4 });
+  assert.equal(label, '[vx]');
+  // First cut at 5 - 0.4 = 4.6; second at 4.6 + 5 - 0.4 = 9.2.
+  assert.match(filter, /offset=4\.600/);
+  assert.match(filter, /offset=9\.200/);
+  // Final length = 15 - 0.4*2 = 14.2 (≈ the un-extended 3×(5-0.4)+0.4... covers narration).
+  assert.ok(Math.abs(totalDur - 14.2) < 1e-6);
+  // Single clip → no transition.
+  const one = buildXfadeGraph([5], { dur: 0.4 });
+  assert.equal(one.filter, '');
+  assert.equal(one.label, '[0:v]');
+});
+
+test('transitions: TRANSITIONS maps names; cut is the plain (null) hard cut', () => {
+  assert.equal(TRANSITIONS.cut, null);
+  assert.equal(TRANSITIONS.fade, 'fade');
+  assert.ok('slideleft' in TRANSITIONS && 'wipeleft' in TRANSITIONS);
 });
 
 // ---------- HTTP contract ----------

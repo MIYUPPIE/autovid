@@ -14,7 +14,8 @@
     "eval:render": "node test/render.smoke.js",
     "eval:edit": "node test/edit.smoke.js",
     "eval:beats": "node test/beats.smoke.js",
-    "eval:cards": "node test/cards.smoke.js"
+    "eval:cards": "node test/cards.smoke.js",
+    "eval:transitions": "node test/transitions.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",
