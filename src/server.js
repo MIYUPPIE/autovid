@@ -299,7 +299,7 @@ export { app };
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
   app.listen(config.port, () => {
-    console.log(`\n  AutoVid running →  http://localhost:${config.port}`);
+    console.log(`\n  GriotVid running →  http://localhost:${config.port}`);
     console.log(`  Keys: xai=${Boolean(config.xaiKey)} pexels=${Boolean(config.pexelsKey)} pixabay=${Boolean(config.pixabayKey)}`);
     console.log(`  Model: ${config.xaiModel}\n`);
   });

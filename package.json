@@ -1,7 +1,7 @@
 {
-  "name": "autovid-pipeline",
+  "name": "griotvid",
   "version": "1.0.0",
-  "description": "AI-assisted video pipeline: xAI scripting + free stock footage + Edge-TTS voiceover + FFmpeg editing engine",
+  "description": "GriotVid — AI video studio: xAI scripting + free stock footage + neural voiceover (incl. Yoruba/Igbo/Hausa) + FFmpeg editing engine",
   "type": "module",
   "main": "src/server.js",
   "scripts": {
