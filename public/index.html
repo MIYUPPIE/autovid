@@ -330,6 +330,16 @@
           <div class="sw on" id="sw-fade"><i></i></div></div>
       </div>
 
+      <div id="capRow">
+        <label>Caption size</label>
+        <div class="seg" id="capSize">
+          <button data-v="S">Small</button>
+          <button data-v="M" class="on">Medium</button>
+          <button data-v="L">Large</button>
+          <button data-v="XL">X-Large</button>
+        </div>
+      </div>
+
       <div id="musRow" style="display:none">
         <label>Music source</label>
         <div class="seg" id="musSrc">
@@ -365,7 +375,7 @@
 <script>
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
-  sub:true,motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null};
+  sub:true,capSize:'M',motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null};
 
 // health
 fetch('/api/health').then(r=>r.json()).then(h=>{
@@ -420,7 +430,8 @@ seg('#mode','mode',()=>{
 // toggles
 function tog(id,key,cb){$(id).closest('.tog').addEventListener('click',()=>{
   const on=$(id).classList.toggle('on'); state[key]=on; cb&&cb(on);});}
-tog('#sw-sub','sub');
+tog('#sw-sub','sub',on=>{$('#capRow').style.display=on?'block':'none';});
+seg('#capSize','capSize');
 tog('#sw-motion','motion');
 tog('#sw-fade','fade');
 tog('#sw-bi','bi',on=>{$('#biRow').style.display=on?'block':'none';});
@@ -461,7 +472,7 @@ $('#go').addEventListener('click',async ()=>{
   const payload={tone:$('#tone').value,context:state.context,
     aspect:state.aspect,targetSeconds:+$('#len').value,
     voice:$('#voice').value,rate:$('#rate').value,
-    subtitles:state.sub,fades:state.fade,motion:state.motion,
+    subtitles:state.sub,captionSize:state.capSize,fades:state.fade,motion:state.motion,
     autoMusic:state.mus && state.musSrc==='auto',
     bgMusicPath:useUpload?state.bgMusicPath:null};
   if(scriptMode) payload.script=text; else payload.topic=text;
@@ -496,13 +507,71 @@ function logLine(t,cls){const c=$('#console');
   const d=document.createElement('div');d.className=cls||'';
   d.textContent='› '+t;c.appendChild(d);c.scrollTop=c.scrollHeight;}
 
+// Stream a job to completion, surfacing % into the caption status line.
+function waitJob(id){
+  return new Promise((resolve,reject)=>{
+    const es=new EventSource('/api/job/'+id+'/stream');
+    es.onmessage=ev=>{const d=JSON.parse(ev.data);const st=$('#capStatus');
+      if(st&&d.progress)st.textContent='Re-rendering captions… '+d.progress.pct+'%';};
+    es.addEventListener('end',ev=>{es.close();const d=JSON.parse(ev.data);
+      d.status==='done'?resolve(d.result):reject(new Error(d.error||'render failed'));});
+    es.onerror=()=>{es.close();reject(new Error('stream error'));};
+  });
+}
+
+// Change burned-in caption size after the fact: patch the project's caption
+// style, re-render (final mux only), then hot-swap the video keeping playhead.
+async function resizeCaptions(pid,size,btn){
+  const seg=btn.parentElement;
+  [...seg.children].forEach(x=>x.classList.toggle('on',x===btn));
+  state.capSize=size;
+  const st=$('#capStatus'); st.textContent='Saving…';
+  try{
+    const p=await (await fetch('/api/project/'+pid)).json();
+    if(p.error) throw new Error(p.error);
+    p.captions=p.captions||{};
+    p.captions.style=Object.assign({},p.captions.style,{size});
+    const put=await fetch('/api/project/'+pid,{method:'PUT',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(p)});
+    if(!put.ok){const e=await put.json().catch(()=>({}));throw new Error(e.error||'save failed');}
+    const start=await (await fetch('/api/project/'+pid+'/render',{method:'POST'})).json();
+    if(!start.jobId) throw new Error(start.error||'could not start re-render');
+    const out=await waitJob(start.jobId);
+    const v=$('#resultVideo'); const t=v.currentTime, playing=!v.paused;
+    const url='/output/'+out.file+'?t='+Date.now();
+    v.src=url; $('#resultDl').href='/output/'+out.file;
+    v.addEventListener('loadeddata',()=>{try{v.currentTime=t;}catch(_){}; if(playing)v.play();},{once:true});
+    v.load();
+    st.textContent='✓ Caption size: '+size;
+  }catch(e){ st.textContent='Resize failed: '+e.message; }
+}
+
 function showResult(res){
   logLine('Render complete: '+res.title,'s');
   const music = res.music ? `<div class="muted">🎵 Music: ${res.music.name} — ${res.music.artist}</div>` : '';
   const lang = res.language && res.language!=='English' ? `<div class="muted">🗣️ Narrated in ${res.language}</div>` : '';
+  // Captions are burned in, but the size lives in the editable project doc, so a
+  // resize re-runs only the final mux (seconds) — no full re-render.
+  const capCtl = (state.sub && res.projectId) ? `
+    <label style="margin-top:14px">Caption size</label>
+    <div class="seg" id="capResize">
+      <button data-v="S">Small</button>
+      <button data-v="M">Medium</button>
+      <button data-v="L">Large</button>
+      <button data-v="XL">X-Large</button>
+    </div>
+    <div class="muted" id="capStatus" style="margin-top:6px"></div>` : '';
   $('#resultBox').innerHTML=
-    `<video controls src="/output/${res.file}"></video>${lang}${music}<br>
-     <a class="dl" href="/output/${res.file}" download>⬇ Download MP4</a>`;
+    `<video id="resultVideo" controls src="/output/${res.file}"></video>${lang}${music}${capCtl}<br>
+     <a class="dl" id="resultDl" href="/output/${res.file}" download>⬇ Download MP4</a>`;
+  if(capCtl){
+    const cur=state.capSize||'M';
+    [...$('#capResize').children].forEach(b=>b.classList.toggle('on',b.dataset.v===cur));
+    $('#capResize').addEventListener('click',e=>{
+      const b=e.target.closest('button'); if(!b||b.classList.contains('on'))return;
+      resizeCaptions(res.projectId,b.dataset.v,b);
+    });
+  }
   if(res.scenes){
     $('#planBox').innerHTML='<b>Scene breakdown</b>'+res.scenes.map(s=>
       `<div class="sc"><b>${s.index}.</b> ${s.narration}

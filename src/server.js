@@ -9,6 +9,7 @@ import { ensureDirs } from './voice.js';
 import { runPipeline, getJob, startProjectRender } from './pipeline.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects } from './project.js';
 import { activeLlm } from './llm.js';
+import { CAPTION_SIZES } from './captions.js';
 
 ensureDirs();
 
@@ -64,6 +65,11 @@ app.post('/api/render', (req, res) => {
   const voice2 = isValidVoice(b.voice2) && b.voice2 !== voice ? b.voice2 : null;
   const rate = (b.rate || '+0%').toString();
   const subtitles = Boolean(b.subtitles);
+  // Caption size: a named preset (S/M/L/XL) or a raw multiplier. Stored on the
+  // project so it survives into edits and re-renders; captions.js clamps it.
+  const captionStyle = {};
+  if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
+  if (Number(b.captionScale) > 0) captionStyle.scale = Number(b.captionScale);
   const fades = b.fades !== false;
   const motion = b.motion !== false; // Ken Burns on by default
   const autoMusic = Boolean(b.autoMusic);
@@ -71,7 +77,7 @@ app.post('/api/render', (req, res) => {
 
   const id = runPipeline({
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-    subtitles, bgMusicPath, fades, motion, autoMusic,
+    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic,
   });
   res.json({ jobId: id });
 });
