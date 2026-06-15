@@ -209,6 +209,24 @@ export async function downloadClip(url, filenameBase) {
   }
 }
 
+// Words that already pin a query to an African context — if any is present we
+// don't bolt another region term on top.
+const AFRICA_HINT = /\b(africa|african|nigeria|nigerian|lagos|abuja|kenya|kenyan|nairobi|ghana|ghanaian|accra|south\s?africa|johannesburg|ethiopia|ethiopian|tanzania|swahili|yoruba|igbo|hausa|sahel|savanna|savannah)\b/i;
+
+/**
+ * Bias a stock-footage query toward African scenes when the audience is African.
+ * Generic queries ("street market", "students studying") otherwise return mostly
+ * Western stock; appending "Africa" pulls culturally relevant footage. Returns an
+ * ordered query list: the localized variant FIRST, then the bare query as a
+ * fallback so a thin localized result set still finds something. For non-African
+ * audiences (or queries already localized) it's just the original query.
+ */
+export function localizeQuery(query, context) {
+  const q = String(query || '').trim();
+  if (!q || context !== 'africa' || AFRICA_HINT.test(q)) return [q].filter(Boolean);
+  return [`${q} Africa`, q];
+}
+
 export function orientationFor(aspect) {
   if (aspect === '9:16') return 'portrait';
   if (aspect === '1:1') return 'square';

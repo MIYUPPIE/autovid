@@ -8,9 +8,9 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { config, RESOLUTIONS } from '../src/config.js';
-import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES } from '../src/voices.js';
-import { orientationFor, scoreCandidate, interleaveByScore, clipKey } from '../src/stock.js';
-import { parseJsonLoose, splitScriptIntoScenes } from '../src/xai.js';
+import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES, edgeVoiceName } from '../src/voices.js';
+import { orientationFor, scoreCandidate, interleaveByScore, clipKey, localizeQuery } from '../src/stock.js';
+import { parseJsonLoose, splitScriptIntoScenes, languageNote } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
 import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
@@ -61,6 +61,55 @@ test('voices: native group carries engine + script language; YarnGPT voices have
   assert.equal(swahili.engine, 'edge');
   assert.equal(swahili.lang, 'Swahili');
   assert.equal(getVoice('en-US-AvaNeural').lang, 'English');
+});
+
+// ---------- Pidgin + code-switching (#3) ----------
+test('voices: Nigerian Pidgin voices exist and alias the en-NG neural voices', () => {
+  const f = getVoice('pcm-NG-EzinnePidgin');
+  const m = getVoice('pcm-NG-AbeoPidgin');
+  assert.ok(f && m, 'both Pidgin voices present');
+  assert.equal(f.lang, 'Nigerian Pidgin');
+  assert.equal(f.engine, 'edge');
+  // The catalogue id is a logical alias; synthesis must use the real edge voice.
+  assert.equal(edgeVoiceName('pcm-NG-EzinnePidgin'), 'en-NG-EzinneNeural');
+  assert.equal(edgeVoiceName('pcm-NG-AbeoPidgin'), 'en-NG-AbeoNeural');
+  // A plain edge voice resolves to itself (back-compat).
+  assert.equal(edgeVoiceName('en-US-AvaNeural'), 'en-US-AvaNeural');
+  assert.equal(edgeVoiceName('unknown-id'), 'unknown-id');
+});
+
+test('xai: languageNote handles English, Pidgin and other languages correctly', () => {
+  const en = languageNote('English');
+  assert.match(en, /English/);
+  assert.ok(!/avoid English/i.test(en));
+
+  // Pidgin keeps its code-switching — must NOT tell the model to avoid English.
+  const pcm = languageNote('Nigerian Pidgin');
+  assert.match(pcm, /Pidgin/i);
+  assert.ok(!/Avoid English\/Latin loanwords/i.test(pcm), 'Pidgin must not ban English loanwords');
+  assert.match(pcm, /query.*ENGLISH/is, 'stock queries stay English');
+
+  // A true native language keeps the strict no-loanword TTS rules.
+  const yo = languageNote('Yoruba');
+  assert.match(yo, /Yoruba/);
+  assert.match(yo, /Avoid English\/Latin loanwords/i);
+
+  // codeSwitch adds a mixing instruction without breaking the native rules.
+  assert.match(languageNote('Yoruba', { codeSwitch: true }), /Code-switch/i);
+  assert.match(languageNote('English', { codeSwitch: true }), /English words/i);
+});
+
+// ---------- localized visual bias (#4) ----------
+test('stock: localizeQuery biases African audiences toward African footage', () => {
+  // African audience → localized variant first, bare query as fallback.
+  assert.deepEqual(localizeQuery('street market', 'africa'), ['street market Africa', 'street market']);
+  // Already-localized query is left alone (no double "Africa Africa").
+  assert.deepEqual(localizeQuery('Lagos traffic', 'africa'), ['Lagos traffic']);
+  assert.deepEqual(localizeQuery('african village', 'africa'), ['african village']);
+  // Global audience → untouched.
+  assert.deepEqual(localizeQuery('street market', 'global'), ['street market']);
+  // Empty/whitespace → empty list, never a bare " Africa".
+  assert.deepEqual(localizeQuery('   ', 'africa'), []);
 });
 
 // ---------- resolutions ----------
