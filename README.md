@@ -122,7 +122,7 @@ A real, vanilla timeline editor is built into the UI — no separate app, no fra
 
 - **Live preview + transport** — play/pause (space), scrub, frame-step (←/→). Captions are drawn as a word-by-word karaoke overlay (spoken vs upcoming colours), Ken Burns motion is previewed, and the voice + music play in sync.
 - **Timeline** — a ruler, a **scene track with filmstrip thumbnails**, the **narration waveform**, and a **caption-cue track**. Drag a scene to **reorder**; drag the **boundary handle** between two scenes to move the cut (total locked to the voice); a dashed marker shows where the narration ends. Zoom in/out.
-- **Captions** — drag cue blocks to retime, drag the edges to resize, click to edit text; style globally (S/M/L/XL or exact px, spoken/upcoming colours, words-per-line). Split a scene or add a cue at the playhead.
+- **Captions** — drag cue blocks to retime, drag the edges to resize, click to edit text; **drag the caption anywhere on the frame** to place it (or use the 3×3 anchor grid / reset to bottom); style globally (S/M/L/XL or exact px, spoken/upcoming colours, words-per-line). Split a scene or add a cue at the playhead. Position is stored as normalized `posX/posY` and burned in at render via an ASS `\pos` override.
 - **Footage** — per scene: trim in/out, Ken Burns on/off, **Replace footage** by upload, or **search stock right in the inspector** and click a hover-preview to swap it in.
 - **Audio & effects** — music volume (live), add/remove a track, fades.
 
