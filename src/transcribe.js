@@ -109,3 +109,24 @@ export function windowCues(segments, start, end) {
     }))
     .filter((c) => c.end > c.start);
 }
+
+/**
+ * Per-WORD cues for a highlight window, retimed to the window start. Uses whisper
+ * word_timestamps so each caption word lands on the exact moment it is spoken,
+ * not a syllable estimate. One cue per word (its own [start,end]); buildKaraokeAss
+ * regroups them into readable lines. Returns [] when no word timing is available
+ * (older transcripts) so callers can fall back to windowCues. Pure → testable.
+ */
+export function windowWordCues(segments, start, end) {
+  const cues = [];
+  for (const s of segments || []) {
+    if (!Array.isArray(s.words) || !s.words.length) continue;
+    for (const w of s.words) {
+      const ws = Number(w.start), we = Number(w.end);
+      const text = (w.text || '').trim();
+      if (!text || !(we > ws) || we <= start || ws >= end) continue;
+      cues.push({ start: Math.max(0, ws - start), end: Math.min(end, we) - start, text });
+    }
+  }
+  return cues.filter((c) => c.end > c.start);
+}

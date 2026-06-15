@@ -34,6 +34,15 @@ async function run() {
     const hits = ['quick', 'brown', 'fox', 'lazy', 'dog', 'river'].filter((w) => text.includes(w));
     if (hits.length < 2) { console.error(`FAIL: too few words recovered (${hits.join(',')})`); process.exit(1); }
     console.log(`PASS: recovered ${hits.length} key words (${hits.join(', ')})`);
+
+    // Word timestamps drive exact karaoke caption timing — assert they're present
+    // and monotonic so the shorts/dub caption path can't silently regress to the
+    // syllable estimate. (Also proves the CPU device fallback transcribed at all.)
+    const words = tr.segments.flatMap((s) => s.words || []);
+    if (words.length < 3) { console.error('FAIL: no per-word timestamps emitted'); process.exit(1); }
+    const ordered = words.every((w, i) => w.end > w.start && (i === 0 || w.start >= words[i - 1].start - 0.01));
+    if (!ordered) { console.error('FAIL: word timestamps not ordered/positive'); process.exit(1); }
+    console.log(`PASS: ${words.length} word timestamps, ordered (e.g. ${words.slice(0, 3).map((w) => `${w.text}@${w.start}`).join(' ')})`);
   } finally {
     fs.unlinkSync(mp3);
   }

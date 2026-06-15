@@ -76,6 +76,9 @@ export function buildProject(parts) {
       duration: Number(s.duration) || 0,
       motion: s.motion !== false,
       trim: s.trim || null,                      // { in, out } in source seconds, or null
+      // Dub/source scenes hold their last frame instead of looping when the clip
+      // is shorter than the (voiceover-driven) scene length. Off for stock B-roll.
+      freeze: Boolean(s.freeze),
     };
     start += scene.duration;
     return scene;
@@ -168,7 +171,7 @@ export function planRender(p, prev = {}) {
   for (const s of p.scenes) {
     const h = hashOf({
       source: s.source?.path, card: s.card, duration: s.duration, motion: s.motion,
-      trim: s.trim, aspect: p.aspect, fps: p.fps,
+      trim: s.trim, freeze: s.freeze, aspect: p.aspect, fps: p.fps,
       // Transitions render each clip longer (xfade headroom), so the normalized
       // clip depends on the chosen transition too.
       transition: p.effects?.transition || 'cut',

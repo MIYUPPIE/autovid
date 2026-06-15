@@ -52,9 +52,24 @@ def main():
     try:
         segments, info = model.transcribe(
             media, language=language, beam_size=1, vad_filter=True,
+            word_timestamps=True,
         )
+
+        def words_of(seg):
+            # Per-word [start,end] so karaoke captions land on the exact word
+            # instead of a syllable estimate. Cast off numpy floats so json works.
+            out = []
+            for w in (getattr(seg, "words", None) or []):
+                txt = (w.word or "").strip()
+                if not txt or w.end is None or w.start is None:
+                    continue
+                out.append({"start": round(float(w.start), 3),
+                            "end": round(float(w.end), 3), "text": txt})
+            return out
+
         segs = [
-            {"start": round(s.start, 3), "end": round(s.end, 3), "text": s.text.strip()}
+            {"start": round(s.start, 3), "end": round(s.end, 3),
+             "text": s.text.strip(), "words": words_of(s)}
             for s in segments if s.text and s.text.strip()
         ]
         out = {
