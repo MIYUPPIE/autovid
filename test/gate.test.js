@@ -19,7 +19,7 @@ import {
   captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS,
 } from '../src/captions.js';
 import { buildXfadeGraph, TRANSITIONS } from '../src/ffmpeg.js';
-import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
+import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
@@ -206,6 +206,31 @@ test('pipeline: runPipeline returns a string job id synchronously and registers 
     assert.equal(typeof id, 'string');
     assert.ok(id.length > 0);
     assert.ok(getJob(id), 'job should be registered immediately');
+  } finally {
+    config.xaiKey = savedKey;
+  }
+});
+
+// ---------- multi-language one-shot (#1) ----------
+test('pipeline: runMultiPipeline fans out into one registered job per language', () => {
+  const savedKey = config.xaiKey;
+  config.xaiKey = ''; // background workers fail fast, offline
+  try {
+    const batch = runMultiPipeline({
+      topic: 'jollof rice', context: 'africa', aspect: '9:16', targetSeconds: 30,
+      tone: 'engaging', voice: 'en-NG-EzinneNeural', rate: '+0%', subtitles: false,
+      voices: ['yarn-yor-f', 'yarn-ibo-f', 'en-NG-EzinneNeural', 'not-a-voice'],
+    });
+    assert.equal(typeof batch.batchId, 'string');
+    // 3 distinct valid voices (base + 2 extras; the dupe + junk are dropped).
+    assert.equal(batch.jobs.length, 3);
+    assert.deepEqual(batch.jobs.map((j) => j.language).sort(), ['English', 'Igbo', 'Yoruba']);
+    for (const j of batch.jobs) {
+      assert.equal(typeof j.jobId, 'string');
+      assert.ok(getJob(j.jobId), 'each variant job is registered');
+    }
+    // No valid voice at all → throws (caught by the endpoint as 400).
+    assert.throws(() => runMultiPipeline({ topic: 't', voice: 'bogus', voices: [] }));
   } finally {
     config.xaiKey = savedKey;
   }
@@ -915,6 +940,31 @@ test('http: POST /api/render returns a STRING jobId (not {})', async () => {
       const body = await res.json();
       assert.equal(typeof body.jobId, 'string');
       assert.ok(body.jobId.length > 0);
+    });
+  } finally {
+    config.xaiKey = savedKey;
+  }
+});
+
+test('http: POST /api/render/multi returns a batch of string jobIds', async () => {
+  const savedKey = config.xaiKey;
+  config.xaiKey = '';
+  try {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/render/multi`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ topic: 'lagos street food', aspect: '9:16',
+          voices: ['yarn-yor-f', 'yarn-hau-m'] }),
+      });
+      assert.equal(res.status, 200);
+      const body = await res.json();
+      assert.ok(typeof body.batchId === 'string' && body.jobs.length >= 2);
+      assert.ok(body.jobs.every((j) => typeof j.jobId === 'string' && j.language));
+      // Empty request → 400.
+      const bad = await fetch(`${base}/api/render/multi`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+      });
+      assert.equal(bad.status, 400);
     });
   } finally {
     config.xaiKey = savedKey;
