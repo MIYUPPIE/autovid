@@ -318,6 +318,26 @@ test('captions: buildKaraokeAss writes a valid ASS with \\k tags and every word'
   for (const w of ['Ndi', 'Igbo', 'kwenu.', 'Daalu.']) assert.ok(ass.includes(w), `keeps word ${w}`);
 });
 
+test('captions: posX/posY drop the caption at an absolute frame point', () => {
+  const base = path.join(os.tmpdir(), `av_pos_${Date.now()}`);
+  // Default (no position) → no \pos, line stays styled bottom-centre.
+  const def = `${base}_d.ass`;
+  buildKaraokeAss({ cues: [{ start: 0, end: 3, text: 'hello there' }], aspect: '16:9', assPath: def });
+  const dass = fs.readFileSync(def, 'utf8'); fs.unlinkSync(def);
+  assert.ok(!dass.includes('\\pos('), 'no \\pos when unpositioned');
+
+  // Positioned top-left-ish → \an5\pos at the scaled pixel coords (1920x1080).
+  const pos = `${base}_p.ass`;
+  buildKaraokeAss({ cues: [{ start: 0, end: 3, text: 'hello there' }], aspect: '16:9', assPath: pos,
+    style: { posX: 0.25, posY: 0.1 } });
+  const pass = fs.readFileSync(pos, 'utf8'); fs.unlinkSync(pos);
+  assert.match(pass, /\{\\an5\\pos\(480,108\)\}/, 'line carries \\an5\\pos at 0.25*1920, 0.1*1080');
+  // every Dialogue still keeps its karaoke tags after the position override
+  for (const d of pass.split('\n').filter((l) => l.startsWith('Dialogue:'))) {
+    assert.ok(d.includes('{\\k'), 'karaoke timing preserved with positioning');
+  }
+});
+
 test('captions: ASS Events Format matches the Dialogue layout (no "0,," leak)', () => {
   // Regression: a short Format line made libass spill margin/effect values
   // ("0,,") into the visible caption text. Format must declare all 10 V4+ event

@@ -184,8 +184,10 @@ function assHeader({ w, h, fontSize, primary = '&H0000FFFF', secondary = '&H00FF
 }
 
 // Render one Dialogue per line, each word prefixed with a `{\k}` of its own
-// duration (centiseconds) so it highlights exactly when spoken.
-function lineToDialogue(line) {
+// duration (centiseconds) so it highlights exactly when spoken. `posTag` is an
+// optional ASS override (e.g. `{\an5\pos(960,950)}`) placing the line at an
+// absolute point — set when the user has dragged the caption off bottom-center.
+function lineToDialogue(line, posTag = '') {
   const start = line[0].start;
   const end = line[line.length - 1].end;
   const text = line
@@ -194,7 +196,17 @@ function lineToDialogue(line) {
       return `{\\k${cs}}${escAss(w.text)}`;
     })
     .join(' ');
-  return `Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${text}`;
+  return `Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${posTag}${text}`;
+}
+
+// Build the absolute-position override from a style's normalized posX/posY
+// (0..1 across the frame). Returns '' when unset → keep the styled bottom-center.
+// `\an5` anchors the line at its centre so the drop point is intuitive.
+function positionTag(style, w, h) {
+  if (style.posX == null || style.posY == null) return '';
+  const x = Math.round(Math.min(0.98, Math.max(0.02, Number(style.posX))) * w);
+  const y = Math.round(Math.min(0.98, Math.max(0.02, Number(style.posY))) * h);
+  return `{\\an5\\pos(${x},${y})}`;
 }
 
 /**
@@ -219,7 +231,8 @@ export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath
   const fitChars = Math.max(12, Math.floor(usable / (fontSize * 0.55)));
   const grouping = { maxWords: style.maxWords || 6, maxChars: style.maxChars || fitChars };
   const lines = groupIntoLines(words, grouping);
-  const body = lines.map(lineToDialogue).join('\n');
+  const posTag = positionTag(style, w, h);
+  const body = lines.map((l) => lineToDialogue(l, posTag)).join('\n');
   const ass = `${assHeader({ w, h, ...style, fontSize })}\n${body}\n`;
   fs.writeFileSync(assPath, ass, 'utf8');
   return assPath;
