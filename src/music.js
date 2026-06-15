@@ -1,8 +1,7 @@
 import fetch from 'node-fetch';
-import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
 import { config } from './config.js';
+import { downloadToFile, netReason } from './http.js';
 
 // Tone → Jamendo mood/genre tags. Instrumental beds that sit under a voiceover.
 const TONE_TAGS = {
@@ -63,18 +62,11 @@ export async function fetchMusicTrack({ tone, minSeconds = 0 }) {
  */
 export async function downloadMusic(url, base) {
   const dest = path.join(config.dirs.work, `${base}_music.mp3`);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), config.downloadTimeout);
   try {
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    await pipeline(res.body, fs.createWriteStream(dest));
-    return dest;
-  } catch {
-    try { fs.unlinkSync(dest); } catch { /* ignore */ }
+    return await downloadToFile(url, dest, { idleTimeout: config.downloadTimeout, attempts: 3 });
+  } catch (err) {
+    console.warn(`music download failed: ${netReason(err)}`);
     return null;
-  } finally {
-    clearTimeout(timer);
   }
 }
 
