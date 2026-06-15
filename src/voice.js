@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import fetch from 'node-fetch';
 import { config } from './config.js';
+import { pickAgent } from './http.js';
 import { getVoice, edgeVoiceName } from './voices.js';
 
 const execFileP = promisify(execFile);
@@ -122,6 +123,7 @@ async function yarnRequest({ text, yarnVoice, outPath }) {
       headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ text, voice: yarnVoice, response_format: 'mp3' }),
       signal: ctrl.signal,
+      agent: pickAgent,
     });
   } catch (err) {
     if (err.name === 'AbortError') {

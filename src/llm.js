@@ -2,6 +2,7 @@ import fetch from 'node-fetch';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { config } from './config.js';
+import { pickAgent } from './http.js';
 
 const execFileP = promisify(execFile);
 
@@ -16,6 +17,7 @@ async function openaiCompatChat({ base, key, model, messages, temperature = 0.7,
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${key}`, ...extraHeaders },
     body: JSON.stringify(body),
+    agent: pickAgent,
   });
   if (!res.ok) {
     const text = await res.text();

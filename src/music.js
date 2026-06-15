@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import path from 'path';
 import { config } from './config.js';
-import { downloadToFile, netReason } from './http.js';
+import { downloadToFile, netReason, pickAgent } from './http.js';
 
 // Tone → Jamendo mood/genre tags. Instrumental beds that sit under a voiceover.
 const TONE_TAGS = {
@@ -34,7 +34,7 @@ export async function fetchMusicTrack({ tone, minSeconds = 0 }) {
   });
   let data;
   try {
-    const res = await fetch(`https://api.jamendo.com/v3.0/tracks/?${params}`);
+    const res = await fetch(`https://api.jamendo.com/v3.0/tracks/?${params}`, { agent: pickAgent });
     if (!res.ok) return null;
     data = await res.json();
   } catch {

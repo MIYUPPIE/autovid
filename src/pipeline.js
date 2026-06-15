@@ -8,7 +8,7 @@ import { buildKaraokeAss, parseSrt } from './captions.js';
 import { getVoice } from './voices.js';
 import fs from 'fs';
 import { autoMusic } from './music.js';
-import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack } from './ffmpeg.js';
+import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack, makeTextCard } from './ffmpeg.js';
 import { buildProject, saveProject, planRender, loadProject } from './project.js';
 import { renderProject } from './render.js';
 import { detectTempo, beatGrid, snapToBeats } from './beats.js';
@@ -306,7 +306,20 @@ export function runPipeline(opts) {
           const alts = await suggestAlternativeQueries(scene.query, context);
           acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur });
         }
-        if (!acquired) throw new Error(`No usable footage for scene ${scene.index} ("${scene.query}")`);
+        // Last resort: a branded text card so ONE dead query can never kill the
+        // whole render (#6). The card shows a short phrase from the narration.
+        if (!acquired) {
+          const card = { narration: scene.narration, query: scene.query };
+          const norm = await makeTextCard({
+            narration: card.narration, query: card.query, outBase: base,
+            aspect, targetDur: durations[i], index: i,
+          });
+          scene.usedQuery = scene.query;
+          scene.provider = 'card';
+          done += 1;
+          emit(job, 'editing', `Scene ${scene.index}/${n}: generated card (no footage found)`, 20 + Math.round((done / n) * 55));
+          return { norm, source: null, card };
+        }
         scene.usedQuery = acquired.usedQuery;
         scene.provider = acquired.clip.provider;
 
@@ -343,6 +356,7 @@ export function runPipeline(opts) {
           index: sc.index, narration: sc.narration, query: sc.query,
           usedQuery: sc.usedQuery, provider: sc.provider,
           sourcePath: sceneFiles[i].source, clipPath: sceneFiles[i].norm,
+          card: sceneFiles[i].card || null,
           duration: durations[i], motion,
         })),
       });

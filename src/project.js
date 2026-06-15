@@ -69,6 +69,9 @@ export function buildProject(parts) {
       provider: s.provider || null,
       source: { path: s.sourcePath || null },   // raw downloaded clip (kept for re-edits)
       clip: { path: s.clipPath || null },        // normalized scene clip (render cache)
+      // Generated-card fallback (#6): no stock clip exists, so the scene is a
+      // branded text card. Carries the text to regenerate it on re-render.
+      card: s.card || null,
       start,
       duration: Number(s.duration) || 0,
       motion: s.motion !== false,
@@ -160,7 +163,7 @@ export function planRender(p, prev = {}) {
   const sceneDirty = {};
   for (const s of p.scenes) {
     const h = hashOf({
-      source: s.source?.path, duration: s.duration, motion: s.motion,
+      source: s.source?.path, card: s.card, duration: s.duration, motion: s.motion,
       trim: s.trim, aspect: p.aspect, fps: p.fps,
     });
     sceneHashes[s.index] = h;

@@ -1,4 +1,18 @@
 import fetch from 'node-fetch';
+import http from 'node:http';
+import https from 'node:https';
+
+// Pin outbound requests to IPv4. Stock/music CDNs (cdn.pixabay.com, Pexels,
+// Jamendo) publish AAAA records, but many servers/VPSes have broken or unrouted
+// IPv6 — Node then connects to the IPv6 address and hangs until ETIMEDOUT, which
+// surfaced as "download failed: request to … failed, reason:" (empty reason) on
+// EVERY attempt. curl dodges it via Happy-Eyeballs fallback; node-fetch doesn't.
+// Every CDN we touch has A records, so IPv4 is always reachable.
+const agents = {
+  'http:': new http.Agent({ family: 4, keepAlive: true }),
+  'https:': new https.Agent({ family: 4, keepAlive: true }),
+};
+export const pickAgent = (parsedURL) => agents[parsedURL.protocol] || agents['https:'];
 
 // Browser-like headers for CDN downloads. cdn.pixabay.com (and many stock CDNs)
 // sit behind Cloudflare, which challenges or resets connections that send the
@@ -16,12 +30,18 @@ export const BROWSER_HEADERS = {
 // UI showed "download failed: request to … failed, reason:" with nothing after.
 // Dig the actual cause out of the error so failures are always actionable.
 export function netReason(err) {
-  const name = err && err.name && err.name !== 'Error' ? err.name : null; // skip useless "Error"
+  if (!err) return 'network error';
+  let msg = err.message || '';
+  // node-fetch builds "request to <url> failed, reason: <x>" and leaves <x> empty
+  // for socket-level errors (ETIMEDOUT, ECONNRESET) — append the code so the
+  // message isn't a dead end.
+  if (/reason:\s*$/.test(msg) && err.code) msg += err.code;
+  const name = err.name && err.name !== 'Error' ? err.name : null; // skip useless "Error"
   return (
-    (err && err.message) ||
-    (err && err.code) ||
-    (err && err.cause && (err.cause.code || err.cause.message)) ||
-    (err && err.type) ||
+    msg ||
+    err.code ||
+    (err.cause && (err.cause.code || err.cause.message)) ||
+    err.type ||
     name ||
     'network error'
   );
@@ -61,7 +81,7 @@ export async function downloadToFile(url, dest, opts = {}) {
     };
     try {
       armIdle();
-      const res = await fetch(url, { signal: controller.signal, headers, redirect: 'follow' });
+      const res = await fetch(url, { signal: controller.signal, headers, redirect: 'follow', agent: pickAgent });
       if (!res.ok) {
         const e = new Error(`HTTP ${res.status}`);
         if (!TRANSIENT.has(res.status)) e.fatal = true; // 404 etc: don't waste retries

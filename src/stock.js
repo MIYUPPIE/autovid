@@ -1,7 +1,7 @@
 import fetch from 'node-fetch';
 import path from 'path';
 import { config } from './config.js';
-import { BROWSER_HEADERS, downloadToFile } from './http.js';
+import { BROWSER_HEADERS, downloadToFile, pickAgent } from './http.js';
 
 /**
  * Search Pexels videos. Returns array of candidate { url, width, height, duration, provider }.
@@ -15,6 +15,7 @@ async function searchPexels(query, orientation) {
   });
   const res = await fetch(`https://api.pexels.com/videos/search?${params}`, {
     headers: { ...BROWSER_HEADERS, Authorization: config.pexelsKey },
+    agent: pickAgent,
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -51,7 +52,7 @@ async function searchPixabay(query, orientation) {
     per_page: '15',
     video_type: 'film',
   });
-  const res = await fetch(`https://pixabay.com/api/videos/?${params}`, { headers: BROWSER_HEADERS });
+  const res = await fetch(`https://pixabay.com/api/videos/?${params}`, { headers: BROWSER_HEADERS, agent: pickAgent });
   if (!res.ok) return [];
   const data = await res.json();
   const out = [];
