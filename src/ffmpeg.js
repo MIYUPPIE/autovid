@@ -100,6 +100,53 @@ export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 3
   return out;
 }
 
+/** Probe a video's pixel dimensions via ffprobe. Returns { w, h } (0 on failure). */
+export async function probeSize(input) {
+  try {
+    const { stdout } = await execFileP('ffprobe', ['-v', 'error', '-select_streams', 'v:0',
+      '-show_entries', 'stream=width,height', '-of', 'csv=p=0:s=x', input]);
+    const [w, h] = stdout.trim().split('x').map((n) => parseInt(n, 10));
+    return { w: w || 0, h: h || 0 };
+  } catch { return { w: 0, h: 0 }; }
+}
+
+/** Map raw pixel dimensions to the nearest supported aspect preset. Pure. */
+export function nearestAspect(w, h) {
+  if (!w || !h) return '16:9';
+  const r = w / h;
+  if (r < 0.85) return '9:16';
+  if (r > 1.2) return '16:9';
+  return '1:1';
+}
+
+/**
+ * Cut one vertical (or any-aspect) SHORT from a long video (#9): trim [start,end],
+ * scale/crop to the frame, burn captions, KEEP the original audio. Writes to the
+ * output dir. Returns the path. Caption cues must be retimed to the window start
+ * (see transcribe.windowCues) since `-ss start -i` resets timestamps to 0.
+ */
+export async function makeShort({ input, start, end, aspect = '9:16', captions = null, outName }) {
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['9:16'];
+  const out = path.join(config.dirs.output, outName);
+  const dur = Math.max(0.5, end - start);
+  const vchain = [
+    `scale=${w}:${h}:force_original_aspect_ratio=increase`, `crop=${w}:${h}`, 'setsar=1',
+  ];
+  if (captions && fs.existsSync(captions)) vchain.push(captionFilter(captions, h));
+  vchain.push('format=yuv420p');
+  await ffmpeg(['-ss', start.toFixed(3), '-i', input, '-t', dur.toFixed(3),
+    '-vf', vchain.join(','), ...(await videoCodecArgs()),
+    '-c:a', 'aac', '-b:a', '160k', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out], 'makeShort');
+  return out;
+}
+
+/** Extract an audio track (mp3) from a video for transcription. Returns the path. */
+export async function extractAudio({ input, outBase }) {
+  const out = path.join(config.dirs.audio, `${outBase}_src.mp3`);
+  await ffmpeg(['-i', input, '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libmp3lame', '-q:a', '5', out], 'extractAudio');
+  return out;
+}
+
 /**
  * Render a branded TEXT CARD as a scene clip when no stock footage could be
  * found (#6). Guarantees a render never dies on a single dead query: instead of

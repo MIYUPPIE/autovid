@@ -6,7 +6,8 @@ import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
 import { ensureDirs, probeDuration } from './voice.js';
-import { runPipeline, runMultiPipeline, getJob, startProjectRender } from './pipeline.js';
+import { runPipeline, runMultiPipeline, runDub, runShorts, getJob, startProjectRender } from './pipeline.js';
+import { transcriberAvailable } from './transcribe.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects, hashOf } from './project.js';
 import { activeLlm } from './llm.js';
 import { CAPTION_SIZES, CAPTION_ANIMS } from './captions.js';
@@ -56,7 +57,7 @@ app.get('/api/voices', (req, res) => {
   res.json({ voices: VOICES, resolutions: RESOLUTIONS });
 });
 
-app.get('/api/health', (req, res) => {
+app.get('/api/health', async (req, res) => {
   res.json({
     ok: true,
     keys: {
@@ -66,6 +67,7 @@ app.get('/api/health', (req, res) => {
       jamendo: Boolean(config.jamendoClientId),
       yarn: Boolean(config.yarnKey),
     },
+    features: { dub: await transcriberAvailable() }, // transcription present → dub/shorts enabled
     llm: activeLlm(),
     model: config.xaiModel,
   });
@@ -114,6 +116,51 @@ app.post('/api/render', (req, res) => {
   try { opts = buildRenderOpts(req.body); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
   res.json({ jobId: runPipeline(opts) });
+});
+
+// --- Dub an existing video (#2): transcribe → translate → re-narrate ---
+app.post('/api/dub', async (req, res) => {
+  const b = req.body || {};
+  const videoPath = (b.videoPath || '').toString();
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(400).json({ error: 'videoPath is required (upload via /api/clip first)' });
+  }
+  if (!isValidVoice(b.voice)) return res.status(400).json({ error: 'a valid target voice is required' });
+  if (!(await transcriberAvailable())) {
+    return res.status(503).json({ error: 'transcription unavailable — run: pip install faster-whisper' });
+  }
+  const captionStyle = {};
+  if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
+  if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
+  const jobId = runDub({
+    videoPath, voice: b.voice, rate: (b.rate || '+0%').toString(),
+    subtitles: b.subtitles !== false, aspect: b.aspect, captionStyle,
+    sourceLang: b.sourceLang || null, model: (b.model || 'base').toString(),
+  });
+  res.json({ jobId });
+});
+
+// --- Repurpose a long video into shorts (#9) ---
+app.post('/api/shorts', async (req, res) => {
+  const b = req.body || {};
+  const videoPath = (b.videoPath || '').toString();
+  if (!videoPath || !fs.existsSync(videoPath)) {
+    return res.status(400).json({ error: 'videoPath is required (upload via /api/clip first)' });
+  }
+  if (!(await transcriberAvailable())) {
+    return res.status(503).json({ error: 'transcription unavailable — run: pip install faster-whisper' });
+  }
+  const captionStyle = {};
+  if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
+  if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
+  const jobId = runShorts({
+    videoPath, count: Math.max(1, Math.min(10, Number(b.count) || 3)),
+    aspect: RESOLUTIONS[b.aspect] ? b.aspect : '9:16',
+    subtitles: b.subtitles !== false, captionStyle,
+    minSec: Math.max(5, Number(b.minSec) || 15), maxSec: Math.max(15, Number(b.maxSec) || 60),
+    model: (b.model || 'base').toString(), sourceLang: b.sourceLang || null,
+  });
+  res.json({ jobId });
 });
 
 // --- Multi-language one-shot (#1): one idea → N narrated videos at once ---
