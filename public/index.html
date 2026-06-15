@@ -294,6 +294,100 @@
   .proj:hover{border-color:var(--brand-1);background:var(--card-2)}
   .proj b{font-size:14px;font-weight:600;color:var(--text)}
   .proj .meta{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+
+  /* ===== NLE timeline editor ===== */
+  .nle{padding:0;display:none;background:#06060a}
+  .nle.open{display:flex;flex-direction:column;animation:rise .3s cubic-bezier(.2,.8,.2,1) both}
+  .nle-head{display:flex;align-items:center;gap:12px;padding:12px 18px;border-bottom:1px solid var(--border);
+    background:rgba(255,255,255,.02);flex-shrink:0}
+  .nle-title{flex:0 1 340px;font-size:15px;font-weight:700;padding:9px 12px;background:rgba(255,255,255,.03)}
+  .nle-head-actions{margin-left:auto;display:flex;align-items:center;gap:10px}
+  .nle-render{margin-top:0;padding:11px 20px;width:auto;font-size:14px;box-shadow:none}
+  .nle-render::after{display:none}
+  .nle-body{flex:1;display:grid;grid-template-columns:minmax(0,1fr) 340px;min-height:0;overflow:hidden}
+  @media(max-width:920px){.nle-body{grid-template-columns:1fr}}
+  .nle-stagecol{display:flex;flex-direction:column;min-width:0;min-height:0;padding:16px 18px;gap:12px}
+  .stage-wrap{flex:1;display:grid;place-items:center;min-height:0;background:
+    radial-gradient(ellipse 60% 60% at 50% 40%,rgba(16,185,129,.06),transparent 70%)}
+  .stage{position:relative;background:#000;border:1px solid var(--border);border-radius:12px;overflow:hidden;
+    max-width:100%;max-height:100%;box-shadow:0 30px 80px -30px rgba(0,0,0,.9)}
+  .stage video{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;
+    transition:opacity .12s;will-change:transform}
+  .stage video.show{opacity:1}
+  .stage-empty{position:absolute;inset:0;display:none;place-items:center;color:var(--faint);
+    font-size:13px;text-align:center;padding:20px}
+  .stage-empty.show{display:grid}
+  .capovl{position:absolute;left:6%;right:6%;bottom:7%;text-align:center;pointer-events:none;
+    font-weight:700;line-height:1.25;text-shadow:0 2px 6px rgba(0,0,0,.85),0 0 2px rgba(0,0,0,.9)}
+  .capovl .w{transition:color .08s}
+  .transport{display:flex;align-items:center;gap:14px;padding:9px 12px;border:1px solid var(--border);
+    border-radius:12px;background:rgba(255,255,255,.02);flex-shrink:0}
+  .tbtn{width:38px;height:38px;border-radius:10px;border:1px solid var(--border-2);background:var(--card-2);
+    color:var(--text);cursor:pointer;font-size:15px;display:grid;place-items:center;transition:.13s}
+  .tbtn:hover{border-color:var(--brand-1);color:#fff}
+  .tbtn.play{background:var(--grad);border-color:transparent;box-shadow:0 6px 18px -6px rgba(16,185,129,.7)}
+  .tcode{font-family:'JetBrains Mono',monospace;font-size:13px;color:var(--text)}
+  .tspacer{flex:1}
+  .nle-inspector{border-left:1px solid var(--border);background:rgba(255,255,255,.015);overflow-y:auto;
+    padding:16px;min-height:0}
+  @media(max-width:920px){.nle-inspector{border-left:none;border-top:1px solid var(--border);max-height:38vh}}
+  .insp-h{font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+    margin:2px 0 12px;display:flex;align-items:center;gap:8px}
+  .insp-sec{border-top:1px solid var(--border);margin-top:16px;padding-top:14px}
+  .filmstrip{display:flex;gap:2px;border-radius:8px;overflow:hidden;border:1px solid var(--border);margin-bottom:6px;height:54px}
+  .filmstrip img{height:54px;width:auto;flex:1;object-fit:cover;min-width:0}
+  .filmstrip.empty{display:grid;place-items:center;color:var(--faint);font-size:11px;background:rgba(255,255,255,.02)}
+  .twin{display:flex;gap:10px}.twin>*{flex:1}
+  .stockgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px;max-height:280px;overflow:auto}
+  .stockcell{position:relative;border:1px solid var(--border);border-radius:9px;overflow:hidden;cursor:pointer;
+    aspect-ratio:16/10;background:#000;transition:.13s}
+  .stockcell:hover{border-color:var(--brand-1);box-shadow:0 0 0 2px rgba(16,185,129,.25)}
+  .stockcell video{width:100%;height:100%;object-fit:cover}
+  .stockcell .tag{position:absolute;left:5px;bottom:5px;font-size:9px;font-weight:700;background:rgba(0,0,0,.6);
+    color:#fff;padding:2px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace}
+  .stockcell.busy{opacity:.5;pointer-events:none}
+
+  .nle-timeline{flex-shrink:0;border-top:1px solid var(--border);background:rgba(0,0,0,.35);
+    display:flex;flex-direction:column;max-height:42vh}
+  .tl-toolbar{display:flex;align-items:center;gap:10px;padding:7px 14px;border-bottom:1px solid var(--border)}
+  .chip{width:26px;height:26px;border-radius:7px;border:1px solid var(--border-2);background:var(--card-2);
+    color:var(--text);cursor:pointer;font-size:14px;display:grid;place-items:center}
+  .chip:hover{border-color:var(--brand-1)}
+  .tl-scroll{overflow-x:auto;overflow-y:hidden;padding:0 0 12px}
+  .tl-inner{position:relative;min-width:100%}
+  .tl-ruler{position:relative;height:22px;border-bottom:1px solid var(--border);margin:0 0 6px;
+    font-family:'JetBrains Mono',monospace}
+  .tl-tick{position:absolute;top:0;height:22px;border-left:1px solid rgba(255,255,255,.1);
+    padding-left:4px;font-size:9px;color:var(--faint)}
+  .tl-track{position:relative;height:var(--th,56px);margin:5px 0}
+  .tl-scenes{--th:64px}
+  .tl-wave{--th:46px;background:rgba(255,255,255,.015);border-radius:6px}
+  .tl-wave canvas{position:absolute;inset:0;width:100%;height:100%}
+  .tl-caps{--th:40px}
+  .voiceend{position:absolute;top:0;bottom:0;width:0;border-left:2px dashed rgba(251,191,36,.7);z-index:5;pointer-events:none}
+  .sblock{position:absolute;top:0;height:64px;border-radius:8px;overflow:hidden;border:1px solid var(--border-2);
+    background:#111 center/cover;cursor:grab;user-select:none;box-shadow:inset 0 0 0 1px rgba(0,0,0,.3)}
+  .sblock.sel{border-color:var(--brand-1);box-shadow:0 0 0 2px rgba(16,185,129,.5)}
+  .sblock.drag{opacity:.7;cursor:grabbing;z-index:20}
+  .sblock .lbl{position:absolute;left:6px;top:5px;font-size:10px;font-weight:700;color:#fff;
+    background:rgba(0,0,0,.55);padding:2px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace;max-width:80%;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sblock .film{position:absolute;inset:0;display:flex;z-index:-1}
+  .sblock .film img{height:100%;flex:1;object-fit:cover;min-width:0}
+  .bhandle{position:absolute;top:0;height:64px;width:10px;margin-left:-5px;cursor:col-resize;z-index:15}
+  .bhandle::after{content:"";position:absolute;left:4px;top:14px;bottom:14px;width:2px;border-radius:2px;
+    background:rgba(255,255,255,.25)}
+  .bhandle:hover::after{background:var(--brand-1)}
+  .cblock{position:absolute;top:4px;height:30px;border-radius:7px;background:var(--grad-soft);
+    border:1px solid var(--border-2);cursor:grab;user-select:none;display:flex;align-items:center;
+    padding:0 8px;font-size:11px;color:var(--text);white-space:nowrap;overflow:hidden}
+  .cblock.sel{border-color:var(--brand-1);box-shadow:0 0 0 2px rgba(16,185,129,.5)}
+  .cblock .ch{position:absolute;top:0;height:100%;width:8px;cursor:col-resize}
+  .cblock .ch.l{left:0}.cblock .ch.r{right:0}
+  .tl-playhead{position:absolute;top:0;bottom:8px;width:2px;background:var(--brand-1);z-index:25;pointer-events:none;
+    box-shadow:0 0 8px 1px rgba(16,185,129,.8)}
+  .tl-playhead::before{content:"";position:absolute;top:0;left:-5px;border:6px solid transparent;
+    border-top-color:var(--brand-1);border-bottom:none}
 </style>
 </head>
 <body>
@@ -442,70 +536,63 @@
   <footer><b>Stock footage</b> · <b>Neural voiceover</b> (incl. Yoruba / Igbo / Hausa) · <b>Karaoke captions</b> · <b>Automatic editing</b></footer>
 </div>
 
-<!-- ===== EDITOR OVERLAY ===== -->
-<div class="editor" id="editor">
-  <div class="editor-inner">
-    <div class="ed-head">
-      <h2 id="edTitleLbl">Edit video</h2>
+<!-- ===== NLE TIMELINE EDITOR ===== -->
+<div class="editor nle" id="editor">
+  <div class="nle-head">
+    <input id="edTitle" class="nle-title" placeholder="Untitled" title="Video title">
+    <div class="nle-head-actions">
+      <span class="savestate" id="edSaveState"></span>
+      <button class="ghost" id="edSave">💾 Save</button>
+      <button class="go nle-render" id="edRender">⟳ Re-render</button>
       <button class="x" id="edClose" title="Close">✕</button>
     </div>
+  </div>
 
-    <!-- LEFT: scenes + captions -->
-    <div style="display:flex;flex-direction:column;gap:20px">
-      <div class="panel">
-        <h3>🎬 Scenes <span style="margin-left:auto;font-weight:600;text-transform:none;letter-spacing:0" id="edDur"></span></h3>
-        <div id="edScenes"></div>
-        <div class="warn" id="edLenWarn"></div>
-      </div>
-
-      <div class="panel">
-        <h3>📝 Captions</h3>
-        <label class="minitog" style="margin-bottom:6px">
-          <span class="sw" id="ed-capon"><i></i></span> Burned-in karaoke captions
-        </label>
-        <div id="edCapBody">
-          <div class="row" style="margin-top:14px">
-            <div class="field"><small>Font size (px, 0 = auto)</small>
-              <input type="number" id="edFont" min="0" max="200" step="1"></div>
-            <div class="field"><small>Max words / line</small>
-              <input type="number" id="edMaxWords" min="1" max="12" step="1"></div>
-          </div>
-          <div class="swatch"><input type="color" id="edPrimary"><span>Spoken word</span>
-            <input type="color" id="edSecondary" style="margin-left:14px"><span>Upcoming words</span></div>
-          <div id="edCues" style="margin-top:8px"></div>
+  <div class="nle-body">
+    <div class="nle-stagecol">
+      <div class="stage-wrap">
+        <div class="stage" id="edStageBox">
+          <div id="edVideos"></div>
+          <div class="capovl" id="edCap"></div>
+          <div class="stage-empty" id="edStageEmpty">No footage on this scene — pick a clip in the inspector.</div>
         </div>
+      </div>
+      <div class="transport">
+        <button class="tbtn play" id="edPlay" title="Play / pause (space)">▶</button>
+        <button class="tbtn" id="edRewind" title="To start">⏮</button>
+        <span class="tcode" id="edTime">0:00.0 / 0:00.0</span>
+        <span class="tspacer"></span>
+        <label class="minitog"><span class="sw" id="ed-capon"><i></i></span> Captions</label>
+        <label class="minitog"><span class="sw" id="ed-fades"><i></i></span> Fades</label>
+        <span class="muted" id="edMusMini"></span>
+      </div>
+      <!-- re-render progress (hidden until rendering) -->
+      <div id="edProgress" style="display:none">
+        <div class="barwrap"><div class="bar"><i id="edBar"></i></div><span id="edPct">0%</span></div>
+        <div class="stagelbl" id="edStageLbl" style="margin:8px 0">Working…</div>
+        <div class="console" id="edConsole" style="height:96px"></div>
       </div>
     </div>
 
-    <!-- RIGHT: preview + audio/effects + actions (sticky) -->
-    <div class="sticky" style="display:flex;flex-direction:column;gap:20px">
-      <div class="panel">
-        <h3>▶ Preview</h3>
-        <label style="margin-top:0">Title</label>
-        <input id="edTitle" type="text" placeholder="Video title">
-        <div id="edPreview" style="margin-top:14px"></div>
-      </div>
+    <div class="nle-inspector" id="edInspector"></div>
+  </div>
 
-      <div class="panel">
-        <h3>🎵 Audio & effects</h3>
-        <div id="edMusicBox"></div>
-        <div class="toggles" style="margin-top:14px">
-          <div class="tog"><span>🎬 Fade in / out</span>
-            <div class="sw" id="ed-fades"><i></i></div></div>
-        </div>
-      </div>
-
-      <div class="panel">
-        <div class="ed-actions">
-          <button class="ghost" id="edSave" style="padding:16px 22px">💾 Save edits</button>
-          <button class="go" id="edRender">⟳ Re-render</button>
-        </div>
-        <div class="savestate" id="edSaveState"></div>
-        <div id="edProgress" style="display:none;margin-top:14px">
-          <div class="barwrap"><div class="bar"><i id="edBar"></i></div><span id="edPct">0%</span></div>
-          <div class="stagelbl" id="edStage" style="margin-bottom:10px">Working…</div>
-          <div class="console" id="edConsole" style="height:140px"></div>
-        </div>
+  <div class="nle-timeline">
+    <div class="tl-toolbar">
+      <span class="muted" id="edTlInfo"></span>
+      <span class="tspacer"></span>
+      <button class="chip" id="edZoomOut" title="Zoom out">−</button>
+      <span class="muted" style="font-size:11px">zoom</span>
+      <button class="chip" id="edZoomIn" title="Zoom in">+</button>
+    </div>
+    <div class="tl-scroll" id="edTlScroll">
+      <div class="tl-inner" id="edTlInner">
+        <div class="tl-ruler" id="edRuler"></div>
+        <div class="tl-track tl-scenes" id="edSceneTrack"></div>
+        <div class="tl-track tl-wave" id="edWaveTrack"><canvas id="edWave"></canvas></div>
+        <div class="tl-track tl-caps" id="edCapTrack"></div>
+        <div class="voiceend" id="edVoiceEnd"></div>
+        <div class="tl-playhead" id="edPlayhead"></div>
       </div>
     </div>
   </div>
@@ -743,16 +830,49 @@ function assToHex(a){if(!a)return '#ff ff00'.replace(' ','');const m=a.replace(/
   return ('#'+m.slice(6,8)+m.slice(4,6)+m.slice(2,4)).toLowerCase();}
 function hexToAss(h){const m=(h||'#ffffff').replace('#','');return ('&H00'+m.slice(4,6)+m.slice(2,4)+m.slice(0,2)).toUpperCase();}
 
-let proj=null;          // the loaded project document (edits mutate this)
-let edBusy=false;       // true while re-rendering
+/* ---------- editor state ---------- */
+let proj=null;          // full project doc (what we PUT on save)
+let pv=null;            // preview bundle (voice/music urls + voiceDuration)
+let sel={type:null,id:null};   // current selection: {type:'scene'|'cue', id}
+let pps=80;             // pixels per second (timeline zoom)
+let playing=false, clock=0, rafId=0;
+const sceneVideos={};   // scene.index -> <video>
+let voiceEl=null, musicEl=null;
+let edBusy=false, stockReq=0;
+const CAPTION_SIZES={S:0.78,M:1,L:1.3,XL:1.6};
+const FRAMES={'16:9':{w:1920,h:1080},'9:16':{w:1080,h:1920},'1:1':{w:1080,h:1080}};
 
-document.getElementById('openProjects').addEventListener('click',openProjects);
-document.getElementById('pjClose').addEventListener('click',()=>document.getElementById('projects').classList.remove('open'));
-document.getElementById('edClose').addEventListener('click',closeEditor);
+const E=(id)=>document.getElementById(id);
+
+E('openProjects').addEventListener('click',openProjects);
+E('pjClose').addEventListener('click',()=>E('projects').classList.remove('open'));
+E('edClose').addEventListener('click',closeEditor);
+E('edPlay').addEventListener('click',togglePlay);
+E('edRewind').addEventListener('click',()=>seek(0));
+E('edZoomIn').addEventListener('click',()=>setZoom(pps*1.4,true));
+E('edZoomOut').addEventListener('click',()=>setZoom(pps/1.4,true));
+E('edSave').addEventListener('click',()=>doSave().then(ok=>ok&&setSaveState('Saved.','ok')));
+E('edRender').addEventListener('click',reRender);
+E('edTitle').addEventListener('input',e=>{ if(proj) proj.title=e.target.value; });
+E('edTlScroll').addEventListener('click',(e)=>{ // click empty timeline area to seek
+  if(e.target.closest('.sblock,.cblock,.bhandle')) return;
+  const r=E('edTlInner').getBoundingClientRect();
+  seek((e.clientX-r.left)/pps);
+});
+window.addEventListener('keydown',e=>{
+  if(!E('editor').classList.contains('open'))return;
+  const t=e.target.tagName; if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return;
+  if(e.code==='Space'){e.preventDefault();togglePlay();}
+  else if(e.key==='ArrowRight'){seek(clock+1/30);}
+  else if(e.key==='ArrowLeft'){seek(clock-1/30);}
+});
+window.addEventListener('resize',()=>{ if(E('editor').classList.contains('open')) layoutStage(); });
+// Deep link: /#edit=<projectId> opens straight into the editor (shareable edit link).
+setTimeout(()=>{ const m=(location.hash||'').match(/edit=([A-Za-z0-9_-]+)/); if(m) openEditor(m[1]); },60);
 
 async function openProjects(){
-  const box=document.getElementById('projects'); box.classList.add('open');
-  const list=document.getElementById('pjList'); list.innerHTML='<div class="muted">Loading…</div>';
+  const box=E('projects'); box.classList.add('open');
+  const list=E('pjList'); list.innerHTML='<div class="muted">Loading…</div>';
   try{
     const {projects}=await (await fetch('/api/projects')).json();
     if(!projects.length){list.innerHTML='<div class="muted">No saved videos yet. Generate one first.</div>';return;}
@@ -765,226 +885,516 @@ async function openProjects(){
 }
 
 async function openEditor(id){
-  document.getElementById('projects').classList.remove('open');
+  E('projects').classList.remove('open');
+  stopPlay();
   try{
-    const r=await fetch('/api/project/'+id);
-    if(!r.ok){alert('Project not found');return;}
-    proj=await r.json();
-  }catch(e){alert('Could not load project');return;}
+    const [pr,pb]=await Promise.all([
+      fetch('/api/project/'+id).then(r=>r.ok?r.json():Promise.reject(new Error('doc'))),
+      fetch('/api/project/'+id+'/preview').then(r=>r.ok?r.json():Promise.reject(new Error('preview'))),
+    ]);
+    proj=pr; pv=pb;
+  }catch(e){alert('Could not load this project');return;}
   proj.captions=proj.captions||{enabled:false,cues:[],style:{}};
   proj.captions.style=proj.captions.style||{};
   proj.effects=proj.effects||{};
-  document.getElementById('editor').classList.add('open');
-  document.getElementById('edProgress').style.display='none';
+  proj.audio=proj.audio||{};
+  // Attach the browser-playable source URL onto each scene (single working array).
+  proj.scenes.forEach(s=>{ const m=(pv.scenes||[]).find(x=>x.index===s.index); s._url=m?m.sourceUrl:null; s._thumbs=null; });
+  relayout();
+  sel={type:null,id:null}; clock=0; playing=false; edBusy=false;
+  E('editor').classList.add('open');
+  E('edProgress').style.display='none';
   setSaveState('');
-  renderEditor();
-}
-function closeEditor(){ if(edBusy && !confirm('A re-render is running. Close anyway?'))return;
-  document.getElementById('editor').classList.remove('open'); proj=null; edBusy=false; }
-
-function renderEditor(){
-  document.getElementById('edTitleLbl').textContent='Edit · '+(proj.title||'Untitled');
-  document.getElementById('edTitle').value=proj.title||'';
-  // preview (cache-bust so a re-rendered file refreshes)
-  document.getElementById('edPreview').innerHTML=
-    `<video controls src="/output/${proj.id}_final.mp4?t=${Date.now()}"></video>
-     <a class="dl" style="margin-top:12px" href="/output/${proj.id}_final.mp4" download>⬇ Download MP4</a>`;
-  renderScenes();
-  renderCaptions();
-  renderAudio();
-  // fades toggle
-  setSw('ed-fades', proj.effects.fades!==false);
-  bindOnce(document.getElementById('ed-fades').closest('.tog'),'click',()=>{
-    proj.effects.fades=toggleSw('ed-fades'); });
-  document.getElementById('edTitle').oninput=e=>proj.title=e.target.value;
-  document.getElementById('edSave').onclick=()=>saveProject().then(ok=>ok&&setSaveState('Saved.','ok'));
-  document.getElementById('edRender').onclick=reRender;
+  E('edTitle').value=proj.title||'';
+  buildMedia();
+  layoutStage();
+  setZoom(fitZoom(),false);
+  buildTimeline();
+  loadWaveform();
+  renderInspector();
+  syncToggles();
+  startLoop();
+  seek(0);
 }
 
-/* ---- scenes ---- */
-function renderScenes(){
-  const wrap=document.getElementById('edScenes');
-  wrap.innerHTML=proj.scenes.map((s,i)=>{
-    const up=i===0?'disabled':'', down=i===proj.scenes.length-1?'disabled':'';
-    const del=proj.scenes.length<=1?'disabled':'';
-    const t=s.trim||{};
-    return `<div class="scene">
-      <div class="scene-top">
-        <span class="scene-idx">#${i+1}</span>
-        <div class="scene-narr">${esc(s.narration)||'<span class="muted">(no narration text)</span>'}</div>
-        <div class="scene-ctl">
-          <button class="iconbtn" ${up} onclick="moveScene(${i},-1)" title="Move up">▲</button>
-          <button class="iconbtn" ${down} onclick="moveScene(${i},1)" title="Move down">▼</button>
-          <button class="iconbtn danger" ${del} onclick="deleteScene(${i})" title="Delete scene">🗑</button>
-        </div>
-      </div>
-      <div class="scene-meta">
-        <div class="field"><small>Duration (s)</small>
-          <input type="number" min="0.5" step="0.1" value="${(+s.duration).toFixed(1)}" oninput="setScene(${i},'duration',this.value)"></div>
-        <div class="field"><small>Trim in (s)</small>
-          <input type="number" min="0" step="0.1" value="${t.in!=null?t.in:''}" placeholder="0" oninput="setTrim(${i},'in',this.value)"></div>
-        <div class="field"><small>Trim out (s)</small>
-          <input type="number" min="0" step="0.1" value="${t.out!=null?t.out:''}" placeholder="end" oninput="setTrim(${i},'out',this.value)"></div>
-        <label class="minitog"><span class="sw ${s.motion!==false?'on':''}" onclick="toggleMotion(${i},this)"><i></i></span> Motion</label>
-        <label class="field replace"><small>Replace footage</small>
-          <input type="file" accept="video/*" onchange="replaceFootage(${i},this)"></label>
-        <span class="muted replaceStatus" id="rs${i}"></span>
-      </div>
-    </div>`;
-  }).join('');
-  updateDuration();
-}
-function moveScene(i,dir){const j=i+dir;if(j<0||j>=proj.scenes.length)return;
-  const a=proj.scenes;[a[i],a[j]]=[a[j],a[i]];renderScenes();}
-function deleteScene(i){if(proj.scenes.length<=1)return;proj.scenes.splice(i,1);renderScenes();}
-function setScene(i,key,val){proj.scenes[i][key]=parseFloat(val)||0;updateDuration();}
-function setTrim(i,key,val){const s=proj.scenes[i];s.trim=s.trim||{};
-  if(val===''||val==null){delete s.trim[key];} else {s.trim[key]=parseFloat(val)||0;}
-  if(s.trim.in==null&&s.trim.out==null)s.trim=null;}
-function toggleMotion(i,el){const on=el.classList.toggle('on');proj.scenes[i].motion=on;}
-async function replaceFootage(i,input){
-  const f=input.files[0];if(!f)return;const st=document.getElementById('rs'+i);st.textContent='Uploading…';
-  try{
-    const ext=(f.name.split('.').pop()||'mp4');
-    const r=await fetch('/api/clip?ext='+ext,{method:'POST',
-      headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
-    const d=await r.json();
-    if(d.path){proj.scenes[i].source={path:d.path};proj.scenes[i].clip={path:null};proj.scenes[i].trim=null;
-      st.textContent='✓ '+f.name+' (re-encodes on render)';st.className='muted replaceStatus';st.style.color='var(--ok)';}
-    else st.textContent='Upload failed';
-  }catch(e){st.textContent='Upload failed';}
-}
-function updateDuration(){
-  const visual=proj.scenes.reduce((a,s)=>a+(+s.duration||0),0);
-  const narr=proj.audio?.voiceTrack?.duration||0;
-  document.getElementById('edDur').textContent=`visual ${fmt(visual)} · narration ${fmt(narr)}`;
-  const w=document.getElementById('edLenWarn');const diff=visual-narr;
-  if(narr&&diff<-0.3){w.className='warn show';
-    w.textContent=`⚠ Footage is ${Math.abs(diff).toFixed(1)}s shorter than the narration — the video will freeze on the last frame while the voice keeps going. Add duration or a scene.`;}
-  else if(narr&&diff>0.5){w.className='warn show';
-    w.textContent=`⚠ Footage is ${diff.toFixed(1)}s longer than the narration — the tail past ${fmt(narr)} is cut to match the voice.`;}
-  else w.className='warn';
+function closeEditor(){
+  if(edBusy && !confirm('A re-render is running. Close anyway?'))return;
+  stopPlay(); cancelAnimationFrame(rafId); rafId=0;
+  if(voiceEl)voiceEl.pause(); if(musicEl)musicEl.pause();
+  E('editor').classList.remove('open'); proj=null; pv=null;
 }
 
-/* ---- captions ---- */
-function renderCaptions(){
-  const c=proj.captions, st=c.style||{};
-  setSw('ed-capon', c.enabled!==false);
-  document.getElementById('edFont').value=st.fontSize||0;
-  document.getElementById('edMaxWords').value=st.maxWords||6;
-  document.getElementById('edPrimary').value=assToHex(st.primary||'&H0000FFFF');
-  document.getElementById('edSecondary').value=assToHex(st.secondary||'&H00FFFFFF');
-  document.getElementById('edCues').innerHTML=(c.cues||[]).map((q,i)=>
-    `<div class="cue"><span class="tc">${fmt(q.start)}</span>
-      <input value="${esc(q.text)}" oninput="setCue(${i},this.value)"></div>`).join('')
-    || '<div class="muted">No caption cues.</div>';
-  document.getElementById('edCapBody').style.opacity=c.enabled!==false?'1':'.4';
-  bindOnce(document.getElementById('ed-capon').closest('.minitog'),'click',()=>{
-    proj.captions.enabled=toggleSw('ed-capon');
-    document.getElementById('edCapBody').style.opacity=proj.captions.enabled?'1':'.4';});
-  document.getElementById('edFont').oninput=e=>setStyle('fontSize',parseInt(e.target.value)||0);
-  document.getElementById('edMaxWords').oninput=e=>setStyle('maxWords',parseInt(e.target.value)||6);
-  document.getElementById('edPrimary').oninput=e=>setStyle('primary',hexToAss(e.target.value));
-  document.getElementById('edSecondary').oninput=e=>setStyle('secondary',hexToAss(e.target.value));
-}
-function setCue(i,val){proj.captions.cues[i].text=val;}
-function setStyle(key,val){proj.captions.style=proj.captions.style||{};
-  if(!val&&key==='fontSize')delete proj.captions.style[key];else proj.captions.style[key]=val;}
+/* ---------- geometry helpers ---------- */
+function frameDims(){ return FRAMES[proj.aspect]||FRAMES['16:9']; }
+function relayout(){ let t=0; for(const s of proj.scenes){ s.start=t; t+=Number(s.duration)||0; } proj._visual=t; }
+function visualLen(){ return proj._visual||0; }
+function voiceLen(){ return pv.voiceDuration||proj.audio?.voiceTrack?.duration||0; }
+function playLen(){ return Math.max(voiceLen(), visualLen(), 0.1); }
+function tlLen(){ return Math.max(voiceLen(), visualLen(), 1); }
+function sceneAt(t){ let last=null; for(const s of proj.scenes){ last=s; if(t>=s.start && t<s.start+s.duration) return s; } return last; }
 
-/* ---- audio ---- */
-function renderAudio(){
-  const box=document.getElementById('edMusicBox');const m=proj.audio?.music;
-  if(m){
-    const vol=typeof m.volume==='number'?m.volume:0.12;
-    const name=m.meta?`${esc(m.meta.name||'track')} — ${esc(m.meta.artist||'')}`:'Background music';
-    box.innerHTML=`<label style="margin-top:0">🎵 ${name}</label>
-      <div class="row" style="align-items:center;gap:14px">
-        <input type="range" id="edVol" min="0" max="0.5" step="0.01" value="${vol}">
-        <span class="lenval" id="edVolLbl">${Math.round(vol*100)}%</span>
-      </div>
-      <button class="ghost" style="margin-top:12px" onclick="removeMusic()">✕ Remove music</button>`;
-    document.getElementById('edVol').oninput=e=>{const v=parseFloat(e.target.value);
-      proj.audio.music.volume=v;document.getElementById('edVolLbl').textContent=Math.round(v*100)+'%';};
-  }else{
-    box.innerHTML=`<label style="margin-top:0">🎵 Background music</label>
-      <div class="muted">No music on this video.</div>
-      <label class="replace" style="margin-top:10px">Add a track (mp3/wav, looped & ducked)</label>
-      <input type="file" accept="audio/*" onchange="addMusic(this)">
-      <div class="muted" id="edMusStatus"></div>`;
+/* ---------- media elements ---------- */
+function buildMedia(){
+  const vc=E('edVideos'); vc.innerHTML=''; for(const k in sceneVideos) delete sceneVideos[k];
+  for(const s of proj.scenes){
+    const v=document.createElement('video');
+    v.muted=true; v.playsInline=true; v.preload='auto'; v.loop=false;
+    if(s._url) v.src=s._url;
+    vc.appendChild(v); sceneVideos[s.index]=v;
+  }
+  if(voiceEl){voiceEl.pause();voiceEl.remove();}
+  voiceEl=document.createElement('audio'); voiceEl.preload='auto'; if(pv.voiceUrl)voiceEl.src=pv.voiceUrl;
+  document.body.appendChild(voiceEl);
+  if(musicEl){musicEl.pause();musicEl.remove();musicEl=null;}
+  if(proj.audio?.music && pv.music?.url){
+    musicEl=document.createElement('audio'); musicEl.preload='auto'; musicEl.loop=true; musicEl.src=pv.music.url;
+    musicEl.volume=Math.min(1,Math.max(0,proj.audio.music.volume??0.12));
+    document.body.appendChild(musicEl);
   }
 }
-function removeMusic(){proj.audio.music=null;renderAudio();}
-async function addMusic(input){
-  const f=input.files[0];if(!f)return;const st=document.getElementById('edMusStatus');st.textContent='Uploading…';
-  try{
-    const ext=(f.name.split('.').pop()||'mp3');
-    const r=await fetch('/api/music?ext='+ext,{method:'POST',
-      headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
-    const d=await r.json();
-    if(d.path){proj.audio.music={path:d.path,volume:0.12,meta:{name:f.name,artist:'uploaded'}};renderAudio();}
-    else st.textContent='Upload failed';
-  }catch(e){st.textContent='Upload failed';}
+function layoutStage(){
+  const wrap=E('edStageBox').parentElement.getBoundingClientRect();
+  const {w,h}=frameDims(); const ar=w/h;
+  let W=wrap.width, H=wrap.height;
+  if(W/H>ar) W=H*ar; else H=W/ar;
+  const box=E('edStageBox'); box.style.width=Math.floor(W)+'px'; box.style.height=Math.floor(H)+'px';
 }
 
-/* ---- save / re-render ---- */
-async function saveProject(){
-  setSaveState('Saving…');
+/* ---------- playback loop ---------- */
+function startLoop(){ cancelAnimationFrame(rafId); const tick=()=>{ frame(); rafId=requestAnimationFrame(tick); }; rafId=requestAnimationFrame(tick); }
+function frame(){
+  if(playing && voiceEl){ clock=voiceEl.currentTime; if(voiceEl.ended || clock>=playLen()-0.02){ stopPlay(); clock=playLen(); } }
+  positionVideos(clock); drawCaptions(clock); updatePlayhead(clock); updateTimecode(clock);
+}
+function positionVideos(t){
+  const s=sceneAt(t);
+  for(const k in sceneVideos) sceneVideos[k].classList.toggle('show', !!s && +k===s.index && !!s._url);
+  E('edStageEmpty').classList.toggle('show', !!s && !s._url);
+  if(!s || !s._url) return;
+  const v=sceneVideos[s.index]; const local=t-s.start;
+  const inP=(s.trim&&s.trim.in)||0; const outP=(s.trim&&s.trim.out)||0;
+  const natural=v.duration||s.duration;
+  const usable=(outP>inP)?(outP-inP):Math.max(0.1,natural-inP);
+  const srcT=inP+(usable>0?(local%usable):local);
+  if(playing){ if(v.paused) v.play().catch(()=>{}); if(Math.abs(v.currentTime-srcT)>0.3){ try{v.currentTime=srcT;}catch(_){} } }
+  else { if(!v.paused) v.pause(); try{v.currentTime=srcT;}catch(_){} }
+  if(s.motion!==false){ const p=Math.min(1,Math.max(0,local/s.duration)); const z=(s.index%2===0)?(1+0.08*p):(1.08-0.08*p); v.style.transform='scale('+z.toFixed(4)+')'; }
+  else v.style.transform='';
+}
+function capEnabled(){ return proj.captions.enabled!==false && (proj.captions.cues||[]).length>0; }
+function capScale(st){ if(st.size&&CAPTION_SIZES[st.size])return CAPTION_SIZES[st.size]; if(Number(st.scale)>0)return Number(st.scale); return 1; }
+function drawCaptions(t){
+  const cap=E('edCap');
+  if(!capEnabled()){ cap.innerHTML=''; return; }
+  const cue=(proj.captions.cues||[]).find(c=>t>=c.start && t<c.end);
+  if(!cue){ cap.innerHTML=''; return; }
+  const st=proj.captions.style||{};
+  const prim=assToHex(st.primary||'&H0000FFFF'), sec=assToHex(st.secondary||'&H00FFFFFF');
+  const words=String(cue.text).split(/\s+/).filter(Boolean);
+  const weights=words.map(w=>Math.max(1,w.replace(/[^A-Za-zÀ-ɏ]/g,'').length));
+  const tot=weights.reduce((a,b)=>a+b,0)||1; const dur=Math.max(0.1,cue.end-cue.start); const el=t-cue.start;
+  let acc=0;
+  cap.innerHTML=words.map((w,i)=>{ const a=acc/tot*dur; acc+=weights[i]; const on=el>=a; return `<span class="w" style="color:${on?prim:sec}">${esc(w)}</span>`; }).join(' ');
+  const fr=frameDims(); const scale=E('edStageBox').clientWidth/fr.w;
+  const fs=(st.fontSize?Number(st.fontSize):fr.w*0.058*capScale(st))*scale;
+  cap.style.fontSize=Math.max(8,fs)+'px';
+}
+function updateTimecode(t){ E('edTime').textContent=fmt(t)+' / '+fmt(playLen()); }
+function updatePlayhead(t){
+  const x=t*pps; E('edPlayhead').style.left=x+'px';
+  if(playing){ const sc=E('edTlScroll'); const vw=sc.clientWidth; if(x<sc.scrollLeft+40||x>sc.scrollLeft+vw-40) sc.scrollLeft=x-vw/2; }
+}
+
+/* ---------- transport ---------- */
+function togglePlay(){ playing?stopPlay():startPlay(); }
+function startPlay(){
+  if(clock>=playLen()-0.02) clock=0;
+  if(voiceEl){ try{voiceEl.currentTime=Math.min(clock,voiceLen()||clock);}catch(_){} voiceEl.play().catch(()=>{}); }
+  if(musicEl){ try{musicEl.currentTime=clock%(musicEl.duration||9999)||0;}catch(_){} musicEl.play().catch(()=>{}); }
+  playing=true; E('edPlay').textContent='⏸';
+}
+function stopPlay(){
+  playing=false; if(voiceEl)voiceEl.pause(); if(musicEl)musicEl.pause();
+  const pb=E('edPlay'); if(pb)pb.textContent='▶';
+  for(const k in sceneVideos){ if(!sceneVideos[k].paused) sceneVideos[k].pause(); }
+}
+function seek(t){
+  clock=Math.max(0,Math.min(playLen(),t));
+  if(voiceEl){ try{voiceEl.currentTime=Math.min(clock,voiceLen()||clock);}catch(_){} }
+  if(musicEl){ try{musicEl.currentTime=clock%(musicEl.duration||9999)||0;}catch(_){} }
+  frame();
+}
+
+/* ---------- timeline build ---------- */
+function fitZoom(){ const w=E('edTlScroll').clientWidth||900; return Math.max(18,Math.min(220,(w-20)/tlLen())); }
+function setZoom(p,keepCenter){
+  const sc=E('edTlScroll'); const cx=(sc.scrollLeft+sc.clientWidth/2)/Math.max(1,pps);
+  pps=Math.max(8,Math.min(600,p));
+  if(E('editor').classList.contains('open')&&proj){ buildTimeline(); drawWave(); if(keepCenter) sc.scrollLeft=cx*pps-sc.clientWidth/2; }
+}
+function buildTimeline(){
+  const L=tlLen(); const W=L*pps;
+  E('edTlInner').style.width=Math.max(W, (E('edTlScroll').clientWidth||0))+'px';
+  buildRuler(L,W); buildScenes(); buildCues(); buildWaveCanvas();
+  const ve=E('edVoiceEnd'); if(voiceLen()>0&&Math.abs(voiceLen()-visualLen())>0.1){ ve.style.display='block'; ve.style.left=voiceLen()*pps+'px'; } else ve.style.display='none';
+  E('edTlInfo').textContent=`${proj.scenes.length} scenes · visual ${fmt(visualLen())} · narration ${fmt(voiceLen())}`;
+  updatePlayhead(clock);
+}
+function niceStep(){ const target=80/pps; const steps=[0.5,1,2,5,10,15,30,60,120]; return steps.find(s=>s>=target)||120; }
+function buildRuler(L,W){
+  const r=E('edRuler'); r.style.width=W+'px'; r.innerHTML='';
+  const step=niceStep();
+  for(let t=0;t<=L+0.001;t+=step){ const d=document.createElement('div'); d.className='tl-tick'; d.style.left=(t*pps)+'px'; d.textContent=fmt(t); r.appendChild(d); }
+}
+function buildScenes(){
+  const tr=E('edSceneTrack'); tr.innerHTML='';
+  proj.scenes.forEach((s,pos)=>{
+    const b=document.createElement('div'); b.className='sblock'+(sel.type==='scene'&&sel.id===s.index?' sel':'');
+    b.style.left=(s.start*pps)+'px'; b.style.width=Math.max(8,s.duration*pps)+'px'; b.dataset.idx=s.index;
+    const film=document.createElement('div'); film.className='film'; b.appendChild(film);
+    fillFilmstrip(s,film);
+    const lbl=document.createElement('div'); lbl.className='lbl'; lbl.textContent='#'+s.index+(s.query?(' · '+s.query):''); b.appendChild(lbl);
+    if(!s._url){ b.style.background='repeating-linear-gradient(45deg,#1a1a22,#1a1a22 8px,#13131a 8px,#13131a 16px)'; }
+    sceneDragHandlers(b,s,pos);
+    tr.appendChild(b);
+    if(pos<proj.scenes.length-1){ const h=document.createElement('div'); h.className='bhandle'; h.style.left=((s.start+s.duration)*pps)+'px'; boundaryHandlers(h,pos); tr.appendChild(h); }
+  });
+}
+async function fillFilmstrip(s,film){
+  if(s._thumbs){ film.innerHTML=s._thumbs.map(u=>`<img src="${u}">`).join(''); return; }
   try{
-    const r=await fetch('/api/project/'+proj.id,{method:'PUT',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify(proj)});
+    const d=await (await fetch(`/api/project/${proj.id}/thumbs/${s.index}?n=6`)).json();
+    if(d.thumbs){ s._thumbs=d.thumbs; film.innerHTML=d.thumbs.map(u=>`<img src="${u}">`).join(''); }
+  }catch(_){}
+}
+function buildCues(){
+  const tr=E('edCapTrack'); tr.innerHTML='';
+  (proj.captions.cues||[]).forEach((c,i)=>{
+    const b=document.createElement('div'); b.className='cblock'+(sel.type==='cue'&&sel.id===i?' sel':'');
+    b.style.left=(c.start*pps)+'px'; b.style.width=Math.max(10,(c.end-c.start)*pps)+'px';
+    b.textContent=c.text; b.title=c.text;
+    const hl=document.createElement('div'); hl.className='ch l'; const hr=document.createElement('div'); hr.className='ch r';
+    b.appendChild(hl); b.appendChild(hr);
+    cueDragHandlers(b,hl,hr,i);
+    tr.appendChild(b);
+  });
+}
+function buildWaveCanvas(){ const c=E('edWave'); c.width=Math.max(1,E('edTlInner').clientWidth); c.height=46; drawWave(); }
+function drawWave(){
+  const c=E('edWave'); if(!c)return; const ctx=c.getContext('2d'); ctx.clearRect(0,0,c.width,c.height);
+  const peaks=pv._peaks; if(!peaks||!peaks.length)return;
+  const L=voiceLen()||tlLen(); const W=L*pps; const mid=c.height/2;
+  ctx.fillStyle='rgba(20,184,166,.55)';
+  for(let i=0;i<peaks.length;i++){ const x=(i/peaks.length)*W; const h=peaks[i]*(c.height*0.92); ctx.fillRect(x,mid-h/2,Math.max(1,W/peaks.length-0.5),h); }
+}
+async function loadWaveform(){
+  if(pv._peaks){ drawWave(); return; }
+  try{ const d=await (await fetch(`/api/project/${proj.id}/waveform?buckets=900`)).json(); pv._peaks=d.peaks||[]; drawWave(); }catch(_){}
+}
+function updateBlockGeometry(){
+  const blocks=[...E('edSceneTrack').querySelectorAll('.sblock')];
+  const handles=[...E('edSceneTrack').querySelectorAll('.bhandle')];
+  proj.scenes.forEach((s,pos)=>{ const b=blocks[pos]; if(b){ b.style.left=(s.start*pps)+'px'; b.style.width=Math.max(8,s.duration*pps)+'px'; }
+    if(handles[pos]) handles[pos].style.left=((s.start+s.duration)*pps)+'px'; });
+}
+
+/* ---------- scene interactions ---------- */
+function sceneDragHandlers(b,s,pos){
+  b.addEventListener('pointerdown',(e)=>{
+    if(e.target.classList.contains('bhandle'))return;
+    e.preventDefault(); const startX=e.clientX; let dx=0; b.setPointerCapture(e.pointerId); b.classList.add('drag');
+    const mv=(ev)=>{ dx=ev.clientX-startX; b.style.transform='translateX('+dx+'px)'; };
+    const up=()=>{ b.releasePointerCapture(e.pointerId); b.classList.remove('drag'); b.style.transform='';
+      b.removeEventListener('pointermove',mv); b.removeEventListener('pointerup',up);
+      if(Math.abs(dx)<6){ selectScene(s.index); return; }
+      const centerX=s.start*pps+dx+ (s.duration*pps)/2; let target=proj.scenes.length-1;
+      for(let i=0;i<proj.scenes.length;i++){ const o=proj.scenes[i]; if(centerX < (o.start+o.duration/2)*pps){ target=i; break; } }
+      moveScene(pos,target); };
+    b.addEventListener('pointermove',mv); b.addEventListener('pointerup',up);
+  });
+}
+function moveScene(from,to){ if(to>from)to--; if(from===to||to<0){buildScenes();return;} const a=proj.scenes; const [m]=a.splice(from,1); a.splice(to,0,m); relayout(); buildTimeline(); selectScene(m.index); }
+function boundaryHandlers(h,i){
+  h.addEventListener('pointerdown',(e)=>{
+    e.preventDefault(); e.stopPropagation(); const startX=e.clientX; h.setPointerCapture(e.pointerId);
+    const a=proj.scenes[i], b=proj.scenes[i+1]; const a0=a.duration,b0=b.duration;
+    const mv=(ev)=>{ let d=(ev.clientX-startX)/pps; d=Math.max(-(a0-0.3),Math.min(b0-0.3,d));
+      a.duration=Math.round((a0+d)*100)/100; b.duration=Math.round((b0-d)*100)/100; relayout(); updateBlockGeometry();
+      const ve=E('edVoiceEnd'); if(ve.style.display==='block') ve.style.left=voiceLen()*pps+'px'; };
+    const up=()=>{ h.releasePointerCapture(e.pointerId); h.removeEventListener('pointermove',mv); h.removeEventListener('pointerup',up);
+      buildTimeline(); if(sel.type==='scene')renderInspector(); E('edTlInfo').textContent=`${proj.scenes.length} scenes · visual ${fmt(visualLen())} · narration ${fmt(voiceLen())}`; };
+    h.addEventListener('pointermove',mv); h.addEventListener('pointerup',up);
+  });
+}
+function selectScene(i){ sel={type:'scene',id:i}; seek(proj.scenes.find(s=>s.index===i).start+0.05); buildScenes(); buildCues(); renderInspector(); }
+
+/* ---------- caption-cue interactions ---------- */
+function cueDragHandlers(b,hl,hr,i){
+  const cue=()=>proj.captions.cues[i];
+  const move=(e)=>{ e.preventDefault(); const sx=e.clientX; const c=cue(); const s0=c.start,e0=c.end; b.setPointerCapture(e.pointerId);
+    const mv=(ev)=>{ let d=(ev.clientX-sx)/pps; d=Math.max(-s0,d); c.start=Math.round((s0+d)*100)/100; c.end=Math.round((e0+d)*100)/100; b.style.left=(c.start*pps)+'px'; };
+    const up=()=>{ b.releasePointerCapture(e.pointerId); b.removeEventListener('pointermove',mv); b.removeEventListener('pointerup',up); if(sel.type==='cue'&&sel.id===i)renderInspector(); };
+    b.addEventListener('pointermove',mv); b.addEventListener('pointerup',up); };
+  const resize=(handle,edge)=>(e)=>{ e.preventDefault(); e.stopPropagation(); const sx=e.clientX; const c=cue(); const v0=edge==='l'?c.start:c.end; handle.setPointerCapture(e.pointerId);
+    const mv=(ev)=>{ let nv=v0+(ev.clientX-sx)/pps; if(edge==='l') c.start=Math.max(0,Math.min(c.end-0.2,Math.round(nv*100)/100)); else c.end=Math.max(c.start+0.2,Math.round(nv*100)/100);
+      b.style.left=(c.start*pps)+'px'; b.style.width=Math.max(10,(c.end-c.start)*pps)+'px'; };
+    const up=()=>{ handle.releasePointerCapture(e.pointerId); handle.removeEventListener('pointermove',mv); handle.removeEventListener('pointerup',up); if(sel.type==='cue'&&sel.id===i)renderInspector(); };
+    handle.addEventListener('pointermove',mv); handle.addEventListener('pointerup',up); };
+  b.addEventListener('pointerdown',(e)=>{ if(e.target.classList.contains('ch'))return; move(e); });
+  b.addEventListener('click',(e)=>{ if(e.target.classList.contains('ch'))return; selectCue(i); });
+  hl.addEventListener('pointerdown',resize(hl,'l')); hr.addEventListener('pointerdown',resize(hr,'r'));
+}
+function selectCue(i){ sel={type:'cue',id:i}; const c=proj.captions.cues[i]; seek(c.start+0.05); buildCues(); buildScenes(); renderInspector(); }
+
+/* ---------- inspector ---------- */
+function renderInspector(){
+  const box=E('edInspector'); let html='';
+  if(sel.type==='scene'){ const s=proj.scenes.find(x=>x.index===sel.id); if(s) html+=sceneInspector(s); }
+  else if(sel.type==='cue'){ html+=cueInspector(sel.id); }
+  else html+=`<div class="insp-h">⚙ Project</div><div class="muted">Select a scene or caption on the timeline to edit it. Global controls below.</div>`;
+  html+=globalInspector();
+  box.innerHTML=html;
+  wireInspector();
+}
+function sceneInspector(s){
+  const t=s.trim||{}; const pos=proj.scenes.findIndex(x=>x.index===s.index);
+  return `<div class="insp-h">🎬 Scene #${s.index}
+      <span class="tspacer"></span>
+      <button class="iconbtn" data-act="up" ${pos===0?'disabled':''} title="Move earlier">▲</button>
+      <button class="iconbtn" data-act="down" ${pos===proj.scenes.length-1?'disabled':''} title="Move later">▼</button>
+      <button class="iconbtn danger" data-act="del" ${proj.scenes.length<=1?'disabled':''} title="Delete">🗑</button></div>
+    <div class="muted" style="margin-bottom:10px">${esc(s.narration||'(no narration text)')}</div>
+    <div class="filmstrip${s._thumbs?'':' empty'}" id="ispFilm">${s._thumbs?s._thumbs.map(u=>`<img src="${u}">`).join(''):'loading frames…'}</div>
+    <div class="twin">
+      <div class="field"><small>Duration (s)</small><input type="number" min="0.3" step="0.1" value="${(+s.duration).toFixed(1)}" data-sc="duration"></div>
+      <label class="minitog" style="align-self:flex-end;padding-bottom:8px"><span class="sw ${s.motion!==false?'on':''}" data-sc="motion"><i></i></span> Motion</label>
+    </div>
+    <div class="twin" style="margin-top:8px">
+      <div class="field"><small>Trim in (s)</small><input type="number" min="0" step="0.1" value="${t.in!=null?t.in:''}" placeholder="0" data-sc="trimin"></div>
+      <div class="field"><small>Trim out (s)</small><input type="number" min="0" step="0.1" value="${t.out!=null?t.out:''}" placeholder="end" data-sc="trimout"></div>
+    </div>
+    <button class="chip" id="ispSplit" style="width:auto;padding:0 12px;margin-top:10px;height:32px">✂ Split at playhead</button>
+    <div class="insp-sec">
+      <small style="color:var(--muted);font-weight:600">Replace footage</small>
+      <input type="file" accept="video/*" id="ispUpload" style="margin-top:8px">
+      <div class="twin" style="margin-top:8px">
+        <input type="text" id="ispStockQ" placeholder="search stock footage…" value="${esc(s.query||'')}">
+        <button class="ghost" id="ispStockGo" style="flex:0 0 auto">Search</button>
+      </div>
+      <div class="stockgrid" id="ispStock"></div>
+      <div class="muted" id="ispSwapStatus" style="margin-top:6px"></div>
+    </div>`;
+}
+function cueInspector(i){
+  const c=proj.captions.cues[i]; if(!c) return '';
+  return `<div class="insp-h">📝 Caption ${i+1}
+      <span class="tspacer"></span>
+      <button class="iconbtn danger" data-cue="del" title="Delete cue">🗑</button></div>
+    <textarea id="ispCueText" style="min-height:72px">${esc(c.text)}</textarea>
+    <div class="twin" style="margin-top:8px">
+      <div class="field"><small>Start (s)</small><input type="number" min="0" step="0.05" value="${(+c.start).toFixed(2)}" data-cue="start"></div>
+      <div class="field"><small>End (s)</small><input type="number" min="0" step="0.05" value="${(+c.end).toFixed(2)}" data-cue="end"></div>
+    </div>
+    <button class="chip" id="ispCueAdd" style="width:auto;padding:0 12px;margin-top:10px;height:32px">＋ Add cue at playhead</button>`;
+}
+function globalInspector(){
+  const st=proj.captions.style||{}; const m=proj.audio?.music;
+  const sizes=['S','M','L','XL']; const cur=st.size||(st.fontSize?'':'M');
+  const vol=m?(typeof m.volume==='number'?m.volume:0.12):0;
+  const diff=visualLen()-voiceLen();
+  let warn='';
+  if(voiceLen()&&diff<-0.3) warn=`<div class="warn show">⚠ Footage ${Math.abs(diff).toFixed(1)}s shorter than narration — last frame freezes while the voice continues.</div>`;
+  else if(voiceLen()&&diff>0.5) warn=`<div class="warn show">⚠ Footage ${diff.toFixed(1)}s longer than narration — the tail past ${fmt(voiceLen())} is cut.</div>`;
+  return `<div class="insp-sec"><div class="insp-h">📝 Captions</div>
+      <label class="minitog"><span class="sw ${capEnabled()?'on':''}" id="gCapOn"><i></i></span> Show captions</label>
+      <small style="display:block;color:var(--muted);margin:12px 0 6px;font-weight:600">Size</small>
+      <div class="seg" id="gCapSize">${sizes.map(z=>`<button data-v="${z}" class="${cur===z?'on':''}">${z}</button>`).join('')}</div>
+      <div class="twin" style="margin-top:10px">
+        <div class="field"><small>Font px (0=auto)</small><input type="number" min="0" max="220" step="1" id="gFont" value="${st.fontSize||0}"></div>
+        <div class="field"><small>Words / line</small><input type="number" min="1" max="12" step="1" id="gWords" value="${st.maxWords||6}"></div>
+      </div>
+      <div class="swatch"><input type="color" id="gPrim" value="${assToHex(st.primary||'&H0000FFFF')}"><span>Spoken</span>
+        <input type="color" id="gSec" value="${assToHex(st.secondary||'&H00FFFFFF')}" style="margin-left:12px"><span>Upcoming</span></div>
+    </div>
+    <div class="insp-sec"><div class="insp-h">🎵 Audio & effects</div>
+      ${m?`<small style="color:var(--muted);font-weight:600">${esc((m.meta&&(m.meta.name))||'Background music')}</small>
+        <div class="twin" style="align-items:center;margin-top:6px"><input type="range" id="gVol" min="0" max="0.5" step="0.01" value="${vol}"><span class="lenval" id="gVolLbl">${Math.round(vol*100)}%</span></div>
+        <button class="ghost" id="gMusRemove" style="margin-top:8px">✕ Remove music</button>`
+       :`<div class="muted">No music.</div><input type="file" accept="audio/*" id="gMusAdd" style="margin-top:8px"><div class="muted" id="gMusStatus"></div>`}
+      <label class="minitog" style="margin-top:14px"><span class="sw ${proj.effects.fades!==false?'on':''}" id="gFades"><i></i></span> Fade in / out</label>
+    </div>${warn}`;
+}
+
+function wireInspector(){
+  // scene controls
+  E('edInspector').querySelectorAll('[data-sc]').forEach(el=>{
+    const key=el.dataset.sc; const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null; if(!s)return;
+    if(key==='motion'){ el.addEventListener('click',()=>{ s.motion=el.classList.toggle('on'); }); return; }
+    el.addEventListener('input',()=>{
+      const v=parseFloat(el.value);
+      if(key==='duration'){ s.duration=Math.max(0.3,v||0.3); relayout(); updateBlockGeometry(); buildTimeline(); }
+      else { s.trim=s.trim||{}; const tk=key==='trimin'?'in':'out'; if(el.value===''){delete s.trim[tk];} else s.trim[tk]=Math.max(0,v||0);
+        if(s.trim.in==null&&s.trim.out==null)s.trim=null; s._thumbs=null; fillFilmstrip(s,document.createElement('div')); buildScenes(); }
+    });
+  });
+  const upAct=E('edInspector').querySelector('[data-act]'); // delegate scene act buttons
+  E('edInspector').querySelectorAll('[data-act]').forEach(btn=>btn.addEventListener('click',()=>{
+    const s=proj.scenes.find(x=>x.index===sel.id); const pos=proj.scenes.findIndex(x=>x.index===sel.id); if(!s)return;
+    const a=btn.dataset.act;
+    if(a==='del'&&proj.scenes.length>1){ proj.scenes.splice(pos,1); sel={type:null,id:null}; relayout(); buildMedia(); buildTimeline(); renderInspector(); }
+    else if(a==='up'&&pos>0) moveScene(pos,pos-1);
+    else if(a==='down'&&pos<proj.scenes.length-1) moveScene(pos,pos+2);
+  }));
+  const split=E('ispSplit'); if(split) split.addEventListener('click',splitAtPlayhead);
+  const film=E('ispFilm'); const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null;
+  if(film&&s&&!s._thumbs){ fetch(`/api/project/${proj.id}/thumbs/${s.index}?n=6`).then(r=>r.json()).then(d=>{ if(d.thumbs){s._thumbs=d.thumbs; if(E('ispFilm')){E('ispFilm').classList.remove('empty');E('ispFilm').innerHTML=d.thumbs.map(u=>`<img src="${u}">`).join('');}} }).catch(()=>{}); }
+  const up=E('ispUpload'); if(up) up.addEventListener('change',()=>replaceFootageFile(up));
+  const sgo=E('ispStockGo'); if(sgo) sgo.addEventListener('click',()=>stockSearch(E('ispStockQ').value));
+  const sq=E('ispStockQ'); if(sq) sq.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();stockSearch(sq.value);} });
+
+  // cue controls
+  const ct=E('ispCueText'); if(ct) ct.addEventListener('input',()=>{ proj.captions.cues[sel.id].text=ct.value; buildCues(); });
+  E('edInspector').querySelectorAll('[data-cue]').forEach(el=>{
+    const k=el.dataset.cue;
+    if(k==='del'){ el.addEventListener('click',()=>{ proj.captions.cues.splice(sel.id,1); sel={type:null,id:null}; buildCues(); renderInspector(); }); return; }
+    el.addEventListener('input',()=>{ const c=proj.captions.cues[sel.id]; const v=parseFloat(el.value)||0; if(k==='start')c.start=Math.min(c.end-0.1,v); else c.end=Math.max(c.start+0.1,v); buildCues(); });
+  });
+  const cadd=E('ispCueAdd'); if(cadd) cadd.addEventListener('click',addCueAtPlayhead);
+
+  // global: captions
+  const gc=E('gCapOn'); if(gc) gc.addEventListener('click',()=>{ proj.captions.enabled=gc.classList.toggle('on'); syncToggles(); });
+  const gs=E('gCapSize'); if(gs) gs.addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b)return; [...gs.children].forEach(x=>x.classList.remove('on')); b.classList.add('on'); proj.captions.style.size=b.dataset.v; proj.captions.style.fontSize=0; const f=E('gFont'); if(f)f.value=0; });
+  const gf=E('gFont'); if(gf) gf.addEventListener('input',()=>{ const v=parseInt(gf.value)||0; if(v>0){proj.captions.style.fontSize=v;} else delete proj.captions.style.fontSize; });
+  const gw=E('gWords'); if(gw) gw.addEventListener('input',()=>{ proj.captions.style.maxWords=parseInt(gw.value)||6; });
+  const gp=E('gPrim'); if(gp) gp.addEventListener('input',()=>{ proj.captions.style.primary=hexToAss(gp.value); });
+  const gse=E('gSec'); if(gse) gse.addEventListener('input',()=>{ proj.captions.style.secondary=hexToAss(gse.value); });
+  // global: audio
+  const gv=E('gVol'); if(gv) gv.addEventListener('input',()=>{ const v=parseFloat(gv.value); proj.audio.music.volume=v; E('gVolLbl').textContent=Math.round(v*100)+'%'; if(musicEl)musicEl.volume=Math.min(1,v); });
+  const grm=E('gMusRemove'); if(grm) grm.addEventListener('click',()=>{ proj.audio.music=null; if(musicEl){musicEl.pause();musicEl.remove();musicEl=null;} renderInspector(); });
+  const gma=E('gMusAdd'); if(gma) gma.addEventListener('change',()=>addMusicFile(gma));
+  const gfa=E('gFades'); if(gfa) gfa.addEventListener('click',()=>{ proj.effects.fades=gfa.classList.toggle('on'); });
+}
+
+/* ---------- scene edit ops ---------- */
+function splitAtPlayhead(){
+  const s=proj.scenes.find(x=>x.index===sel.id); if(!s)return; const pos=proj.scenes.findIndex(x=>x.index===sel.id);
+  const local=clock-s.start; if(local<=0.2||local>=s.duration-0.2)return;
+  const nextIdx=Math.max(...proj.scenes.map(x=>x.index))+1;
+  const inP=(s.trim&&s.trim.in)||0;
+  const clone={...s, index:nextIdx, duration:Math.round((s.duration-local)*100)/100,
+    source:s.source?{...s.source}:null, clip:{path:null}, trim:(s.trim?{...s.trim}:null), _thumbs:null};
+  s.duration=Math.round(local*100)/100; s.clip={path:null};
+  proj.scenes.splice(pos+1,0,clone); relayout(); buildMedia(); buildTimeline(); selectScene(s.index);
+}
+function addCueAtPlayhead(){
+  const t=Math.round(clock*100)/100; const cue={start:t,end:Math.round((t+1.5)*100)/100,text:'New caption'};
+  proj.captions.cues.push(cue); proj.captions.cues.sort((a,b)=>a.start-b.start);
+  proj.captions.enabled=true; syncToggles(); buildCues(); selectCue(proj.captions.cues.indexOf(cue));
+}
+async function replaceFootageFile(input){
+  const f=input.files[0]; if(!f)return; const st=E('ispSwapStatus'); st.textContent='Uploading…';
+  try{
+    const ext=(f.name.split('.').pop()||'mp4');
+    const r=await fetch('/api/clip?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
     const d=await r.json();
-    if(!r.ok){setSaveState((d.validation||[d.error]).join('; '),'err');return false;}
-    proj=d.project;            // server relaid out the timeline (scene start times)
-    renderScenes();            // reflect recomputed starts/duration
-    return true;
-  }catch(e){setSaveState('Save failed: '+e.message,'err');return false;}
+    if(d.path){ applyNewSource(d.path, '/media/raw/'+encodeURIComponent(d.path.split('/').pop())); st.textContent='✓ '+f.name; }
+    else st.textContent='Upload failed';
+  }catch(e){ st.textContent='Upload failed'; }
+}
+async function stockSearch(q){
+  q=(q||'').trim(); if(!q)return; const grid=E('ispStock'); grid.innerHTML='<div class="muted">Searching…</div>';
+  const my=++stockReq;
+  try{
+    const d=await (await fetch(`/api/stock/search?q=${encodeURIComponent(q)}&aspect=${encodeURIComponent(proj.aspect)}`)).json();
+    if(my!==stockReq)return;
+    if(!d.candidates||!d.candidates.length){ grid.innerHTML='<div class="muted">No clips found.</div>'; return; }
+    grid.innerHTML=d.candidates.map((c,i)=>`<div class="stockcell" data-i="${i}"><video src="${c.url}#t=0.1" muted preload="metadata" loop></video><span class="tag">${c.provider} · ${Math.round(c.duration||0)}s</span></div>`).join('');
+    grid.querySelectorAll('.stockcell').forEach((cell,i)=>{
+      const v=cell.querySelector('video');
+      cell.addEventListener('mouseenter',()=>{v.play().catch(()=>{});}); cell.addEventListener('mouseleave',()=>{v.pause();});
+      cell.addEventListener('click',()=>applyStock(d.candidates[i].url,cell));
+    });
+  }catch(e){ if(my===stockReq) grid.innerHTML='<div class="muted">Search failed.</div>'; }
+}
+async function applyStock(url,cell){
+  const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null; if(!s)return;
+  cell.classList.add('busy'); const st=E('ispSwapStatus'); st.textContent='Downloading clip…';
+  try{
+    const r=await fetch(`/api/project/${proj.id}/scene/${s.index}/source`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
+    const d=await r.json();
+    if(r.ok&&d.scene){ applyNewSource(null,d.scene.sourceUrl); st.textContent='✓ Footage replaced (re-encodes on render)'; }
+    else st.textContent=d.error||'Swap failed';
+  }catch(e){ st.textContent='Swap failed'; }
+  cell.classList.remove('busy');
+}
+// Point the selected scene at a new source. `path` updates proj for save; `url` for live preview.
+// For stock swaps the server already saved source.path, so we reload the doc on next save anyway;
+// here we just need the preview to show it now and mark the cache stale.
+function applyNewSource(path,url){
+  const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null; if(!s)return;
+  if(path) s.source={path}; // upload case: client knows the path
+  s.clip={path:null}; s.trim=null; s._thumbs=null; s._url=url; s._swapped=true;
+  const v=sceneVideos[s.index]; if(v){ v.src=url; v.load(); }
+  buildTimeline(); renderInspector(); frame();
+}
+
+/* ---------- toggles sync ---------- */
+function syncToggles(){
+  setSw('ed-capon', capEnabled()); setSw('ed-fades', proj.effects.fades!==false);
+  E('edMusMini').textContent=proj.audio?.music?'🎵 music on':'';
+  bindOnce(E('ed-capon').closest('.minitog'),'click',()=>{ proj.captions.enabled=toggleSw('ed-capon'); renderInspector(); });
+  bindOnce(E('ed-fades').closest('.minitog'),'click',()=>{ proj.effects.fades=toggleSw('ed-fades'); renderInspector(); });
+}
+
+/* ---------- save / re-render ---------- */
+function cleanForSave(){
+  // strip the client-only fields before PUT
+  const copy=JSON.parse(JSON.stringify(proj, (k,v)=> (k==='_url'||k==='_thumbs'||k==='_visual'||k==='_swapped')?undefined:v));
+  return copy;
+}
+async function doSave(){
+  if(!proj)return false; setSaveState('Saving…'); relayout();
+  try{
+    const r=await fetch('/api/project/'+proj.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(cleanForSave())});
+    const d=await r.json();
+    if(!r.ok){ setSaveState((d.validation||[d.error]).join('; '),'err'); return false; }
+    // adopt server-relaid scene starts but keep our client-only fields
+    const fresh=d.project; fresh.scenes.forEach(fs=>{ const cur=proj.scenes.find(s=>s.index===fs.index); fs._url=cur?cur._url:null; fs._thumbs=cur?cur._thumbs:null; });
+    proj=fresh; proj.captions.style=proj.captions.style||{}; proj.effects=proj.effects||{}; proj.audio=proj.audio||{};
+    relayout(); return true;
+  }catch(e){ setSaveState('Save failed: '+e.message,'err'); return false; }
 }
 async function reRender(){
-  if(edBusy)return;
-  if(!await saveProject()){return;}            // never render a stale/invalid doc
-  edBusy=true;
-  document.getElementById('edRender').disabled=true;
-  document.getElementById('edSave').disabled=true;
-  const prog=document.getElementById('edProgress');prog.style.display='block';
-  const con=document.getElementById('edConsole');con.innerHTML='';
-  edBar(0,'Submitting…');setSaveState('');
+  if(edBusy)return; if(!await doSave()){ return; }
+  edBusy=true; stopPlay(); E('edRender').disabled=true; E('edSave').disabled=true;
+  const prog=E('edProgress'); prog.style.display='block'; E('edConsole').innerHTML=''; edBar(0,'Submitting…'); setSaveState('');
   let jobId;
-  try{
-    const r=await fetch('/api/project/'+proj.id+'/render',{method:'POST'});
-    const d=await r.json();
-    if(!r.ok||!d.jobId){throw new Error(d.error||'could not start render');}
-    jobId=d.jobId;
-  }catch(e){edLog('FAILED: '+e.message,'e');finishRender();return;}
+  try{ const r=await fetch('/api/project/'+proj.id+'/render',{method:'POST'}); const d=await r.json();
+    if(!r.ok||!d.jobId)throw new Error(d.error||'could not start'); jobId=d.jobId;
+  }catch(e){ edLog('FAILED: '+e.message,'e'); finishRender(); return; }
   const es=new EventSource(`/api/job/${jobId}/stream`);
-  es.onmessage=ev=>{const d=JSON.parse(ev.data);
-    if(d.progress)edBar(d.progress.pct,d.progress.stage);
-    edLog(`[${d.stage}] ${d.message}`,d.stage==='error'?'e':'');};
-  es.addEventListener('end',ev=>{es.close();const d=JSON.parse(ev.data);
-    if(d.status==='done'){edLog('Re-render complete','s');
-      document.getElementById('edPreview').innerHTML=
-        `<video controls autoplay src="/output/${proj.id}_final.mp4?t=${Date.now()}"></video>
-         <a class="dl" style="margin-top:12px" href="/output/${proj.id}_final.mp4" download>⬇ Download MP4</a>`;
-      if(d.result&&d.result.plan)edLog('Reused cache where possible · scenes re-encoded: ['+
-        (d.result.plan.scenesRerendered||[]).join(', ')+']','s');}
-    else edLog('FAILED: '+(d.error||'unknown'),'e');
-    finishRender();});
-  es.onerror=()=>{es.close();edLog('Connection lost','e');finishRender();};
+  es.onmessage=ev=>{ const d=JSON.parse(ev.data); if(d.progress)edBar(d.progress.pct,d.progress.stage); edLog(`[${d.stage}] ${d.message}`,d.stage==='error'?'e':''); };
+  es.addEventListener('end',ev=>{ es.close(); const d=JSON.parse(ev.data);
+    if(d.status==='done'){ edLog('Re-render complete','s'); if(d.result&&d.result.plan)edLog('scenes re-encoded: ['+(d.result.plan.scenesRerendered||[]).join(', ')+']','s'); reloadAfterRender(); }
+    else edLog('FAILED: '+(d.error||'unknown'),'e'); finishRender(); });
+  es.onerror=()=>{ es.close(); edLog('Connection lost','e'); finishRender(); };
 }
-function finishRender(){edBusy=false;
-  document.getElementById('edRender').disabled=false;
-  document.getElementById('edSave').disabled=false;}
+function finishRender(){ edBusy=false; E('edRender').disabled=false; E('edSave').disabled=false; }
+async function reloadAfterRender(){
+  // refresh preview media (swapped sources now have real served files) without losing place
+  try{ pv=await (await fetch('/api/project/'+proj.id+'/preview')).json();
+    proj.scenes.forEach(s=>{ const m=(pv.scenes||[]).find(x=>x.index===s.index); s._url=m?m.sourceUrl:null; s._thumbs=null; });
+    buildMedia(); buildTimeline(); frame(); }catch(_){}
+}
 
-/* ---- small editor helpers ---- */
-function edBar(p,lbl){document.getElementById('edBar').style.width=p+'%';
-  document.getElementById('edPct').textContent=p+'%';if(lbl)document.getElementById('edStage').textContent=lbl;}
-function edLog(t,cls){const c=document.getElementById('edConsole');const d=document.createElement('div');
-  d.className=cls||'';d.textContent='› '+t;c.appendChild(d);c.scrollTop=c.scrollHeight;}
-function setSaveState(t,cls){const e=document.getElementById('edSaveState');e.textContent=t||'';e.className='savestate '+(cls||'');}
-function setSw(id,on){document.getElementById(id).classList.toggle('on',!!on);}
-function toggleSw(id){return document.getElementById(id).classList.toggle('on');}
-// keep the visual sw in sync when its label is clicked (sw itself isn't the click target)
+/* ---------- small helpers ---------- */
+function edBar(p,lbl){ E('edBar').style.width=p+'%'; E('edPct').textContent=p+'%'; if(lbl)E('edStageLbl').textContent=lbl; }
+function edLog(t,cls){ const c=E('edConsole'); const d=document.createElement('div'); d.className=cls||''; d.textContent='› '+t; c.appendChild(d); c.scrollTop=c.scrollHeight; }
+function setSaveState(t,cls){ const e=E('edSaveState'); e.textContent=t||''; e.className='savestate '+(cls||''); }
+function setSw(id,on){ const e=E(id); if(e)e.classList.toggle('on',!!on); }
+function toggleSw(id){ return E(id).classList.toggle('on'); }
 const _bound=new WeakSet();
-function bindOnce(el,ev,fn){if(!el||_bound.has(el))return;_bound.add(el);el.addEventListener(ev,fn);}
+function bindOnce(el,ev,fn){ if(!el||_bound.has(el))return; _bound.add(el); el.addEventListener(ev,fn); }
 </script>
 </body>
 </html>

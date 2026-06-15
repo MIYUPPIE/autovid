@@ -103,24 +103,32 @@ What an edit costs:
 
 API:
 ```
-GET  /api/projects              list saved projects
-GET  /api/project/:id           load the timeline doc
-PUT  /api/project/:id           save edits (validated, timeline relayed out)
-POST /api/project/:id/render    incremental re-render → poll /api/job/:id
-POST /api/clip?ext=mp4          upload replacement footage for a scene → { path }
+GET  /api/projects                       list saved projects
+GET  /api/project/:id                    load the timeline doc
+GET  /api/project/:id/preview            media bundle for the live player (scene/voice/music URLs + geometry)
+GET  /api/project/:id/thumbs/:index?n=6  filmstrip frames for a scene (cached)
+GET  /api/project/:id/waveform?buckets=  narration waveform peaks (cached JSON)
+PUT  /api/project/:id                    save edits (validated, timeline relayed out)
+POST /api/project/:id/render             incremental re-render → poll /api/job/:id
+POST /api/project/:id/scene/:i/source    swap a scene's footage to a stock/url clip (downloads it)
+GET  /api/stock/search?q=&aspect=        in-editor stock search → candidate clips
+POST /api/clip?ext=mp4                   upload replacement footage for a scene → { path }
+/media/{raw,work,audio,output}/<file>    static asset serving (range-capable, for <video> scrubbing)
 ```
-`npm run eval:render` proves the cache end-to-end with real ffmpeg (full render, then a caption-only edit that reuses every scene encode).
+`npm run eval:render` proves the render cache end-to-end with real ffmpeg; `npm run eval:edit` proves the editor's thumbnail + waveform helpers against real ffmpeg.
 
-### Editing in the browser
-The editor is built into the UI — no separate app. After a render finishes, hit **✎ Edit this video**; to edit an older one, use **🗂️ My projects** in the header. The editor loads the timeline doc and exposes exactly the edits the incremental engine supports:
+### The browser timeline editor (NLE)
+A real, vanilla timeline editor is built into the UI — no separate app, no framework. After a render hit **✎ Edit this video**, or open any past video from **🗂️ My projects**; `/#edit=<projectId>` deep-links straight in. **What you see is what renders** — the preview plays the actual footage, voice, music and a live karaoke caption overlay before you spend a single GPU second.
 
-- **Scenes** — reorder (▲/▼), delete, per-scene duration + source trim (in/out), Ken Burns motion on/off, and **Replace footage** (uploads via `/api/clip`, then re-encodes only that scene). A live `visual vs narration` length readout warns when footage runs short of (freeze) or past (cut) the voice.
-- **Captions** — on/off, edit each cue's text inline, font size, spoken/upcoming word colours, words-per-line.
-- **Audio & effects** — music volume + remove, add a track when there's none, fade in/out.
+- **Live preview + transport** — play/pause (space), scrub, frame-step (←/→). Captions are drawn as a word-by-word karaoke overlay (spoken vs upcoming colours), Ken Burns motion is previewed, and the voice + music play in sync.
+- **Timeline** — a ruler, a **scene track with filmstrip thumbnails**, the **narration waveform**, and a **caption-cue track**. Drag a scene to **reorder**; drag the **boundary handle** between two scenes to move the cut (total locked to the voice); a dashed marker shows where the narration ends. Zoom in/out.
+- **Captions** — drag cue blocks to retime, drag the edges to resize, click to edit text; style globally (S/M/L/XL or exact px, spoken/upcoming colours, words-per-line). Split a scene or add a cue at the playhead.
+- **Footage** — per scene: trim in/out, Ken Burns on/off, **Replace footage** by upload, or **search stock right in the inspector** and click a hover-preview to swap it in.
+- **Audio & effects** — music volume (live), add/remove a track, fades.
 
-**Save edits** PUTs the doc (server re-validates and relays out the timeline); **Re-render** saves first, then POSTs the incremental render and streams progress over SSE into the panel, swapping in the new MP4 when it's done. Each edit only re-runs the stale stages per the cost table above (verified live: caption edit → final only; reorder → concat + final; footage swap → that scene + concat + final).
+**Save** PUTs the doc (server re-validates + relays out the timeline); **Re-render** saves then runs the incremental render, streaming SSE progress and hot-swapping the new MP4. Every edit only re-runs the stale stages per the cost table above (verified live: caption edit → final only; reorder → concat + final; footage swap / duration change → that scene + concat + final).
 
-> Next phase: a full browser NLE on Remotion + designcombo for drag-on-a-timeline preview. The plan/project doc already maps 1:1 to a Remotion composition; `@remotion/player` gives real-time preview, and export stays on this nvenc pipeline.
+> Next phase: swap the hand-rolled preview for `@remotion/player` so the on-screen preview is byte-identical to the export. The project doc already maps 1:1 to a Remotion composition; export stays on this nvenc pipeline.
 
 ## Notes
 - Stock licenses: Pexels & Pixabay are free for commercial use, no attribution required. Keep records if your platform needs them.
