@@ -1,8 +1,7 @@
 import fetch from 'node-fetch';
-import fs from 'fs';
 import path from 'path';
-import { pipeline } from 'stream/promises';
 import { config } from './config.js';
+import { BROWSER_HEADERS, downloadToFile } from './http.js';
 
 /**
  * Search Pexels videos. Returns array of candidate { url, width, height, duration, provider }.
@@ -15,7 +14,7 @@ async function searchPexels(query, orientation) {
     orientation, // landscape | portrait | square
   });
   const res = await fetch(`https://api.pexels.com/videos/search?${params}`, {
-    headers: { Authorization: config.pexelsKey },
+    headers: { ...BROWSER_HEADERS, Authorization: config.pexelsKey },
   });
   if (!res.ok) return [];
   const data = await res.json();
@@ -52,7 +51,7 @@ async function searchPixabay(query, orientation) {
     per_page: '15',
     video_type: 'film',
   });
-  const res = await fetch(`https://pixabay.com/api/videos/?${params}`);
+  const res = await fetch(`https://pixabay.com/api/videos/?${params}`, { headers: BROWSER_HEADERS });
   if (!res.ok) return [];
   const data = await res.json();
   const out = [];
@@ -164,49 +163,19 @@ const MIN_CLIP_BYTES = 16 * 1024;
 /**
  * Download a clip URL to the raw asset folder. Returns local path.
  *
- * Uses an IDLE timeout (reset on every chunk) so a steadily-streaming file is
- * never killed mid-flight, only a stalled connection. Also caps the total size
- * (config.maxClipMb) — we only use a few seconds, so a giant source is just
- * download tax; oversized files are aborted so the caller tries the next clip.
- * On any failure the partial file is removed and the error is rethrown.
+ * Delegates to downloadToFile, which sends browser headers (so Cloudflare-fronted
+ * CDNs like cdn.pixabay.com don't reset the connection from a VPS IP), retries
+ * transient failures, applies an IDLE-stall timeout and a size cap, and throws an
+ * error with a real, non-empty message. On any failure the partial file is removed.
  */
 export async function downloadClip(url, filenameBase) {
   const dest = path.join(config.dirs.raw, `${filenameBase}.mp4`);
-  const maxBytes = config.maxClipMb * 1024 * 1024;
-  const controller = new AbortController();
-  let timer;
-  const armIdle = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => controller.abort(), config.downloadTimeout);
-  };
-  try {
-    armIdle();
-    const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    // Reject obviously oversized files up front when the server tells us the size.
-    const declared = Number(res.headers.get('content-length') || 0);
-    if (declared && declared > maxBytes) {
-      throw new Error(`too large (${Math.round(declared / 1e6)}MB > ${config.maxClipMb}MB)`);
-    }
-
-    let got = 0;
-    res.body.on('data', (chunk) => {
-      armIdle(); // reset the stall clock as bytes arrive
-      got += chunk.length;
-      if (got > maxBytes) controller.abort(); // bail on files that lied about their size
-    });
-    await pipeline(res.body, fs.createWriteStream(dest));
-    clearTimeout(timer);
-
-    const { size } = fs.statSync(dest);
-    if (size < MIN_CLIP_BYTES) throw new Error(`truncated download (${size} bytes)`);
-    return dest;
-  } catch (err) {
-    clearTimeout(timer);
-    try { fs.unlinkSync(dest); } catch { /* nothing to clean */ }
-    throw err;
-  }
+  return downloadToFile(url, dest, {
+    idleTimeout: config.downloadTimeout,
+    maxBytes: config.maxClipMb * 1024 * 1024,
+    minBytes: MIN_CLIP_BYTES,
+    attempts: 3,
+  });
 }
 
 // Words that already pin a query to an African context — if any is present we

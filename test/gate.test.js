@@ -22,6 +22,9 @@ import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
+import { beatGrid, snapToBeats, estimateTempoFromEnvelope, onsetEnvelope } from '../src/beats.js';
+import { netReason, downloadToFile, BROWSER_HEADERS } from '../src/http.js';
+import http from 'node:http';
 import { app } from '../src/server.js';
 
 // Keep project-endpoint tests off the real assets dir.
@@ -668,6 +671,74 @@ test('share: buildShareKit assembles file url (trailing slash trimmed) + lan fil
   assert.equal(buildShareKit({ project, file: 'k1_final.mp4', baseUrl: 'http://host' }).lanFileUrl, null);
 });
 
+// ---------- beat-synced cuts (#5) ----------
+test('beats: beatGrid lays evenly-spaced beats across the duration from BPM', () => {
+  const g = beatGrid(120, 4); // 120 BPM → 0.5s per beat
+  assert.deepEqual(g, [0, 0.5, 1, 1.5, 2, 2.5, 3, 3.5]);
+  // Phase offset shifts the grid but it still starts at/after 0.
+  const o = beatGrid(120, 2, 0.2);
+  assert.equal(o[0], 0.2);
+  assert.ok(o.every((t) => t >= 0));
+  // Degenerate inputs never throw.
+  assert.deepEqual(beatGrid(0, 5), []);
+  assert.deepEqual(beatGrid(120, 0), []);
+});
+
+test('beats: snapToBeats moves cuts onto beats while preserving total + floor', () => {
+  const durations = [4.2, 3.6, 4.1]; // total 11.9; boundaries at 4.2, 7.8
+  const beats = beatGrid(120, 12);   // every 0.5s
+  const snapped = snapToBeats(durations, beats, { minDur: 1.5 });
+  // Total is exactly preserved (video still covers the narration).
+  assert.ok(Math.abs(snapped.reduce((a, b) => a + b, 0) - 11.9) < 1e-6);
+  // Each interior boundary now lands on a 0.5s beat.
+  assert.equal(snapped[0] % 0.5 < 1e-6 || (0.5 - (snapped[0] % 0.5)) < 1e-6, true);
+  const b2 = snapped[0] + snapped[1];
+  assert.ok(Math.abs(b2 * 2 - Math.round(b2 * 2)) < 1e-6, 'second boundary on a beat');
+});
+
+test('beats: snapToBeats respects the floor and never reorders', () => {
+  // A boundary that would snap below the floor is held at prev+minDur.
+  const durations = [0.4, 5.6, 5];
+  const beats = beatGrid(60, 12); // beats every 1s
+  const snapped = snapToBeats(durations, beats, { minDur: 1.5 });
+  assert.ok(snapped.every((d) => d >= 1.5 - 1e-9), `every scene >= floor: ${snapped}`);
+  assert.ok(Math.abs(snapped.reduce((a, b) => a + b, 0) - 11) < 1e-6);
+});
+
+test('beats: snapToBeats is a no-op for one scene or no beats', () => {
+  assert.deepEqual(snapToBeats([10], [0, 1, 2]), [10]);
+  assert.deepEqual(snapToBeats([5, 5], []), [5, 5]);
+});
+
+test('beats: estimateTempoFromEnvelope recovers BPM from a synthetic click track', () => {
+  // A pulse every 12 frames at hop 0.0464s ≈ 0.557s/beat ≈ 107.7 BPM.
+  const hopSec = 512 / 11025;
+  const env = new Array(600).fill(0);
+  for (let i = 0; i < env.length; i += 12) env[i] = 1;
+  const { bpm } = estimateTempoFromEnvelope(env, hopSec, { minBpm: 70, maxBpm: 160 });
+  const expected = 60 / (12 * hopSec);
+  assert.ok(Math.abs(bpm - expected) <= 2, `expected ~${expected.toFixed(1)} BPM, got ${bpm}`);
+});
+
+test('beats: estimateTempoFromEnvelope finds the downbeat phase', () => {
+  const hopSec = 512 / 11025;
+  const env = new Array(300).fill(0);
+  for (let i = 3; i < env.length; i += 12) env[i] = 1; // first onset at frame 3
+  const { offset } = estimateTempoFromEnvelope(env, hopSec);
+  assert.ok(Math.abs(offset - 3 * hopSec) < hopSec, 'offset points at the first onset');
+});
+
+test('beats: onsetEnvelope rises on an energy step and degenerate input is safe', () => {
+  const sr = 11025;
+  const quiet = new Int16Array(1024).fill(0);
+  const loud = new Int16Array(1024).fill(8000);
+  const pcm = Int16Array.from([...quiet, ...loud, ...loud]);
+  const { env, hopSec } = onsetEnvelope(pcm, sr, 512);
+  assert.ok(hopSec > 0);
+  assert.ok(Math.max(...env) > 0, 'a loud onset produces a positive envelope spike');
+  assert.deepEqual(onsetEnvelope(new Int16Array(10), sr, 512).env, []);
+});
+
 // ---------- HTTP contract ----------
 async function withServer(fn) {
   const server = app.listen(0);
@@ -946,4 +1017,81 @@ test('http: POST /api/clip stores a replacement clip and returns its path', asyn
     assert.ok(saved.endsWith('.mp4'));
     assert.equal(fs.readFileSync(saved).length, bytes.length, 'bytes round-trip to disk');
   });
+});
+
+/* ============================ DOWNLOADS (http.js) ============================ */
+// Regression for: replacing a clip failed "all the time" with an empty reason —
+// "download failed: request to cdn.pixabay.com/… failed, reason:". Root cause:
+// node-fetch sent its default UA, which Cloudflare-fronted CDNs reset from VPS
+// IPs; and node-fetch left .message empty so the error was unreadable.
+
+// Tiny local stand-in for a Cloudflare-gated CDN. `mode` shapes the behavior.
+function withFakeCdn(handler, run) {
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer(handler);
+    srv.listen(0, '127.0.0.1', async () => {
+      const base = `http://127.0.0.1:${srv.address().port}`;
+      try { await run(base); resolve(); }
+      catch (e) { reject(e); }
+      finally { srv.close(); }
+    });
+  });
+}
+
+test('netReason: surfaces the real cause when node-fetch leaves .message empty', () => {
+  assert.equal(netReason(Object.assign(new Error(''), { code: 'ECONNRESET' })), 'ECONNRESET');
+  assert.equal(netReason(Object.assign(new Error(''), { cause: { code: 'UND_ERR_SOCKET' } })), 'UND_ERR_SOCKET');
+  assert.equal(netReason(new Error('HTTP 404')), 'HTTP 404'); // real messages pass through
+  assert.equal(netReason(Object.assign(new Error(''), {})), 'network error'); // never blank
+});
+
+test('downloadToFile: sends a browser User-Agent (not node-fetch)', async () => {
+  let seenUA = null;
+  await withFakeCdn((req, res) => { seenUA = req.headers['user-agent']; res.writeHead(200); res.end('clip-bytes'); },
+    async (base) => {
+      const dest = path.join(os.tmpdir(), `av_dl_${Date.now()}.mp4`);
+      await downloadToFile(`${base}/clip.mp4`, dest, { attempts: 1 });
+      assert.equal(seenUA, BROWSER_HEADERS['User-Agent']);
+      assert.ok(/Mozilla\/5\.0/.test(seenUA), 'looks like a real browser UA');
+      fs.unlinkSync(dest);
+    });
+});
+
+test('downloadToFile: retries a transient 503 then succeeds', async () => {
+  let hits = 0;
+  await withFakeCdn((req, res) => {
+    hits += 1;
+    if (hits === 1) { res.writeHead(503); res.end('busy'); return; }
+    res.writeHead(200); res.end('clip-bytes-ok');
+  }, async (base) => {
+    const dest = path.join(os.tmpdir(), `av_dl_retry_${Date.now()}.mp4`);
+    const out = await downloadToFile(`${base}/clip.mp4`, dest, { attempts: 3 });
+    assert.equal(hits, 2, 'failed once, retried, then 200');
+    assert.equal(fs.readFileSync(out, 'utf8'), 'clip-bytes-ok');
+    fs.unlinkSync(dest);
+  });
+});
+
+test('downloadToFile: a 404 fails fast (no wasted retries) with a real message', async () => {
+  let hits = 0;
+  await withFakeCdn((req, res) => { hits += 1; res.writeHead(404); res.end('nope'); }, async (base) => {
+    const dest = path.join(os.tmpdir(), `av_dl_404_${Date.now()}.mp4`);
+    await assert.rejects(
+      () => downloadToFile(`${base}/missing.mp4`, dest, { attempts: 3 }),
+      (err) => { assert.equal(err.message, 'HTTP 404'); return true; },
+    );
+    assert.equal(hits, 1, '404 is permanent — not retried');
+    assert.ok(!fs.existsSync(dest), 'no partial file left behind');
+  });
+});
+
+test('downloadToFile: rejects an oversized file up front via content-length', async () => {
+  await withFakeCdn((req, res) => { res.writeHead(200, { 'content-length': String(50 * 1024 * 1024) }); res.end('x'); },
+    async (base) => {
+      const dest = path.join(os.tmpdir(), `av_dl_big_${Date.now()}.mp4`);
+      await assert.rejects(
+        () => downloadToFile(`${base}/big.mp4`, dest, { attempts: 3, maxBytes: 1 * 1024 * 1024 }),
+        /too large/,
+      );
+    });
 });

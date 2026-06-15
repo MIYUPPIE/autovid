@@ -11,6 +11,7 @@ import { autoMusic } from './music.js';
 import { normalizeClip, concatSilent, finalizeVideo, assembleVoiceTrack } from './ffmpeg.js';
 import { buildProject, saveProject, planRender, loadProject } from './project.js';
 import { renderProject } from './render.js';
+import { detectTempo, beatGrid, snapToBeats } from './beats.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
 const GAP_BETWEEN_LANGS = 0.25;
@@ -166,7 +167,7 @@ export function runPipeline(opts) {
       const {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
-        captionStyle = {}, codeSwitch = false,
+        captionStyle = {}, codeSwitch = false, beatSync = true,
       } = opts;
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
@@ -256,6 +257,34 @@ export function runPipeline(opts) {
       }
       const masterDur = master.duration;
 
+      // 2b. Background music: explicit upload wins; else auto-fetch from Jamendo.
+      // Fetched BEFORE footage so beat-sync can land scene cuts on the music.
+      let bgMusic = bgMusicPath || null;
+      let musicMeta = null;
+      if (!bgMusic && wantMusic) {
+        emit(job, 'render', 'Finding background music…', 13);
+        const picked = await autoMusic({ tone, minSeconds: masterDur, base: id });
+        if (picked) { bgMusic = picked.path; musicMeta = picked.meta; }
+      }
+
+      // 2c. Beat-sync: snap each scene CUT onto the music's beat grid so the
+      // picture changes on the beat (CapCut's signature feel). Only on the single
+      // flowing-narration path; bilingual pacing is driven by its two reads. Any
+      // failure (no ffmpeg, silent track) falls back to the proportional cuts.
+      let beat = null;
+      if (beatSync && bgMusic && !bilingual && durations.length > 1) {
+        try {
+          const tempo = await detectTempo(bgMusic);
+          if (tempo.bpm >= 60 && tempo.bpm <= 200) {
+            const grid = beatGrid(tempo.bpm, masterDur, tempo.offset);
+            const snapped = snapToBeats(durations, grid);
+            beat = { bpm: tempo.bpm, offset: tempo.offset };
+            durations = snapped;
+            emit(job, 'render', `Syncing cuts to ${Math.round(tempo.bpm)} BPM…`, 15);
+          }
+        } catch { /* keep proportional cuts */ }
+      }
+
       // 3+4. Footage + normalize per scene, with bounded concurrency (overlaps
       // network downloads with GPU encodes). One bad download can't kill the render.
       let done = 0;
@@ -295,15 +324,6 @@ export function runPipeline(opts) {
       emit(job, 'render', 'Stitching scenes…', 80);
       const silent = await concatSilent({ sceneFiles: sceneFiles.map((r) => r.norm), outBase: id });
 
-      // 6. Background music: explicit upload wins; else auto-fetch from Jamendo
-      let bgMusic = bgMusicPath || null;
-      let musicMeta = null;
-      if (!bgMusic && wantMusic) {
-        emit(job, 'render', 'Finding background music…', 84);
-        const picked = await autoMusic({ tone, minSeconds: masterDur, base: id });
-        if (picked) { bgMusic = picked.path; musicMeta = picked.meta; }
-      }
-
       // 7. Single final pass: narration + ducked music + subtitles + fades
       emit(job, 'render', 'Mixing audio and rendering final video…', 90);
       const finalPath = await finalizeVideo({
@@ -318,7 +338,7 @@ export function runPipeline(opts) {
         language: bilingual ? `${language} + ${language2}` : language, bilingual,
         voiceTrack: { path: master.audioPath, duration: masterDur },
         captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [], style: captionStyle },
-        music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta } : null,
+        music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta, beat } : null,
         scenes: plan.scenes.map((sc, i) => ({
           index: sc.index, narration: sc.narration, query: sc.query,
           usedQuery: sc.usedQuery, provider: sc.provider,
