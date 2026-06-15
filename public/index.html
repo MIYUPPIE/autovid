@@ -171,6 +171,13 @@
     border-radius:50%;transition:.22s cubic-bezier(.3,1.4,.5,1);box-shadow:0 2px 5px rgba(0,0,0,.4)}
   .sw.on i{left:20px}
 
+  /* multi-select chips */
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0 4px}
+  .chips label{display:inline-flex;align-items:center;gap:5px;padding:5px 10px;border:1px solid var(--border-2);
+    border-radius:999px;font-size:12px;cursor:pointer;background:var(--card-2);color:var(--text);user-select:none}
+  .chips label.on{border-color:transparent;background:var(--grad);color:#1a1206;font-weight:600}
+  .chips input{display:none}
+
   /* range slider */
   input[type=range]{-webkit-appearance:none;appearance:none;height:6px;padding:0;border:none;
     border-radius:999px;background:rgba(255,255,255,.1);cursor:pointer;margin-top:4px}
@@ -464,6 +471,9 @@
     </a>
     <div class="nav-right">
       <div class="health" id="health"></div>
+      <button class="ghost" id="openBrand">🎨 Brand</button>
+      <button class="ghost" id="openDub" style="display:none">🎙️ Dub</button>
+      <button class="ghost" id="openShorts" style="display:none">✂️ Shorts</button>
       <button class="ghost" id="openProjects">🗂️ My projects</button>
     </div>
   </nav>
@@ -530,6 +540,9 @@
       <label>Voiceover</label>
       <select id="voice"></select>
 
+      <label style="margin-top:14px">Also make in… <span class="muted">(one idea → many languages)</span></label>
+      <div class="chips" id="multiLang"></div>
+
       <label>Speaking rate</label>
       <select id="rate">
         <option value="-10%">Slower</option>
@@ -558,8 +571,23 @@
           <div class="sw on" id="sw-motion"><i></i></div></div>
         <div class="tog"><span>🎵 Background music</span>
           <div class="sw" id="sw-mus"><i></i></div></div>
+        <div class="tog"><span>🥁 Beat-sync cuts to music</span>
+          <div class="sw on" id="sw-beat"><i></i></div></div>
+        <div class="tog"><span>🗣️ Code-switch (mix in natural English)</span>
+          <div class="sw" id="sw-cs"><i></i></div></div>
         <div class="tog"><span>🎬 Fade in / out</span>
           <div class="sw on" id="sw-fade"><i></i></div></div>
+      </div>
+
+      <div>
+        <label>Scene transition</label>
+        <div class="seg" id="transition">
+          <button data-v="cut" class="on">Cut</button>
+          <button data-v="fade">Fade</button>
+          <button data-v="slideleft">Slide</button>
+          <button data-v="wipeleft">Wipe</button>
+          <button data-v="dissolve">Dissolve</button>
+        </div>
       </div>
 
       <div id="capRow">
@@ -569,6 +597,13 @@
           <button data-v="M" class="on">Medium</button>
           <button data-v="L">Large</button>
           <button data-v="XL">X-Large</button>
+        </div>
+        <label style="margin-top:12px">Caption animation</label>
+        <div class="seg" id="capAnim">
+          <button data-v="none" class="on">None</button>
+          <button data-v="fade">Fade</button>
+          <button data-v="pop">Pop</button>
+          <button data-v="up">Up</button>
         </div>
       </div>
 
@@ -680,6 +715,87 @@
   </div>
 </div>
 
+<!-- ===== BRAND KIT (#10) ===== -->
+<div class="editor" id="brandModal">
+  <div class="editor-inner" style="grid-template-columns:1fr;max-width:560px">
+    <div class="ed-head"><h2>🎨 Brand kit</h2><button class="x" id="brClose">✕</button></div>
+    <div class="panel">
+      <label>Brand name</label>
+      <input id="brName" placeholder="Your channel / studio name">
+      <label>Logo (watermarked bottom-right)</label>
+      <input type="file" id="brLogo" accept="image/*">
+      <div class="muted" id="brLogoStatus"></div>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:10px">
+        <div><label>Caption — spoken</label><input type="color" id="brCapP" value="#ffd23f"></div>
+        <div><label>Caption — upcoming</label><input type="color" id="brCapS" value="#ffffff"></div>
+        <div><label>Card top</label><input type="color" id="brCard0" value="#1a1206"></div>
+        <div><label>Card bottom</label><input type="color" id="brCard1" value="#3a2a0c"></div>
+      </div>
+      <div class="tog" style="margin-top:14px"><span>▶️ Intro card</span><div class="sw" id="sw-brIntro"><i></i></div></div>
+      <div id="brIntroRow" style="display:none">
+        <input id="brIntroText" placeholder="Intro text (defaults to brand name)">
+        <label>Intro length <span id="brIntroLbl">2.0s</span></label>
+        <input type="range" id="brIntroSec" min="0.8" max="6" step="0.1" value="2">
+      </div>
+      <div class="tog" style="margin-top:10px"><span>⏹️ Outro card</span><div class="sw" id="sw-brOutro"><i></i></div></div>
+      <div id="brOutroRow" style="display:none">
+        <input id="brOutroText" placeholder="Outro text (e.g. Follow for more)">
+        <label>Outro length <span id="brOutroLbl">2.5s</span></label>
+        <input type="range" id="brOutroSec" min="0.8" max="8" step="0.1" value="2.5">
+      </div>
+      <button class="go" id="brSave" style="margin-top:18px">💾 Save brand kit</button>
+      <div class="muted" id="brStatus" style="margin-top:8px">Applied to every new video.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== DUB AN EXISTING VIDEO (#2) ===== -->
+<div class="editor" id="dubModal">
+  <div class="editor-inner" style="grid-template-columns:1fr;max-width:560px">
+    <div class="ed-head"><h2>🎙️ Dub a video</h2><button class="x" id="dubClose">✕</button></div>
+    <div class="panel">
+      <div class="muted">Upload any video — it's transcribed, translated, and re-narrated in the language you pick, over the original footage with karaoke captions.</div>
+      <label style="margin-top:12px">Video file</label>
+      <input type="file" id="dubFile" accept="video/*">
+      <div class="muted" id="dubFileStatus"></div>
+      <label>Dub into (voice / language)</label>
+      <select id="dubVoice"></select>
+      <label>Aspect</label>
+      <div class="seg" id="dubAspect">
+        <button data-v="" class="on">Keep original</button>
+        <button data-v="16:9">16:9</button>
+        <button data-v="9:16">9:16</button>
+        <button data-v="1:1">1:1</button>
+      </div>
+      <button class="go" id="dubGo" style="margin-top:16px">▶ Dub it</button>
+      <div class="muted" id="dubStatus" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== LONG → SHORTS (#9) ===== -->
+<div class="editor" id="shortsModal">
+  <div class="editor-inner" style="grid-template-columns:1fr;max-width:560px">
+    <div class="ed-head"><h2>✂️ Make shorts</h2><button class="x" id="shoClose">✕</button></div>
+    <div class="panel">
+      <div class="muted">Upload a long video — it's transcribed and the strongest moments are cut into captioned vertical clips, ready to post.</div>
+      <label style="margin-top:12px">Video file</label>
+      <input type="file" id="shoFile" accept="video/*">
+      <div class="muted" id="shoFileStatus"></div>
+      <label>How many shorts <span id="shoCountLbl">3</span></label>
+      <input type="range" id="shoCount" min="1" max="8" step="1" value="3">
+      <label>Aspect</label>
+      <div class="seg" id="shoAspect">
+        <button data-v="9:16" class="on">9:16</button>
+        <button data-v="1:1">1:1</button>
+        <button data-v="16:9">16:9</button>
+      </div>
+      <button class="go" id="shoGo" style="margin-top:16px">▶ Make shorts</button>
+      <div class="muted" id="shoStatus" style="margin-top:8px"></div>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="shareSheet">
   <div class="sheet-inner">
     <div class="sheet-head">
@@ -704,7 +820,8 @@
 <script>
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
-  sub:true,capSize:'M',motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null};
+  sub:true,capSize:'M',capAnim:'none',motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null,
+  cs:false,beat:true,transition:'cut',multi:[]};
 
 // health
 fetch('/api/health').then(r=>r.json()).then(h=>{
@@ -713,11 +830,23 @@ fetch('/api/health').then(r=>r.json()).then(h=>{
     pill('Script', llm.configured!==false)+
     pill('Footage',k.pexels)+pill('Stock',k.pixabay)+pill('Music',k.jamendo)+pill('Native voices',k.yarn);
   if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Auto-music needs a key configured in .env.';
+  // Dub + shorts need transcription (faster-whisper). Reveal when present.
+  if(h.features && h.features.dub){ $('#openDub').style.display=''; $('#openShorts').style.display=''; }
 });
 function pill(n,ok){return `<span class="pill ${ok?'ok':'no'}"><span class="ind"></span>${n}</span>`}
 
 // voices
-fetch('/api/voices').then(r=>r.json()).then(d=>{VOICES=d.voices;fillVoices();fillVoices2();});
+fetch('/api/voices').then(r=>r.json()).then(d=>{VOICES=d.voices;fillVoices();fillVoices2();fillMulti();});
+// Multi-language one-shot (#1): one chip per native/African voice (the moat).
+function fillMulti(){
+  const box=$('#multiLang'); if(!box)return;
+  const list=[...(VOICES.native||[]),...(VOICES.africa||[])];
+  box.innerHTML=list.map(v=>`<label data-id="${v.id}"><input type="checkbox">${v.label.split('—')[0].trim()} <span class="muted">${v.lang}</span></label>`).join('');
+  box.querySelectorAll('label').forEach(l=>l.addEventListener('click',()=>{
+    const on=l.classList.toggle('on'); const id=l.dataset.id;
+    state.multi = on ? [...new Set([...state.multi,id])] : state.multi.filter(x=>x!==id);
+  }));
+}
 function fillVoices(){
   const list=VOICES[state.vregion]||[];
   $('#voice').innerHTML=list.map(v=>`<option value="${v.id}" data-lang="${v.lang||''}">${v.label}</option>`).join('');
@@ -761,8 +890,12 @@ function tog(id,key,cb){$(id).closest('.tog').addEventListener('click',()=>{
   const on=$(id).classList.toggle('on'); state[key]=on; cb&&cb(on);});}
 tog('#sw-sub','sub',on=>{$('#capRow').style.display=on?'block':'none';});
 seg('#capSize','capSize');
+seg('#capAnim','capAnim');
+seg('#transition','transition');
 tog('#sw-motion','motion');
 tog('#sw-fade','fade');
+tog('#sw-beat','beat');
+tog('#sw-cs','cs');
 tog('#sw-bi','bi',on=>{$('#biRow').style.display=on?'block':'none';});
 tog('#sw-mus','mus',on=>{$('#musRow').style.display=on?'block':'none';});
 
@@ -802,11 +935,26 @@ $('#go').addEventListener('click',async ()=>{
   const payload={tone:$('#tone').value,context:state.context,
     aspect:state.aspect,targetSeconds:+$('#len').value,
     voice:$('#voice').value,rate:$('#rate').value,
-    subtitles:state.sub,captionSize:state.capSize,fades:state.fade,motion:state.motion,
+    subtitles:state.sub,captionSize:state.capSize,captionAnim:state.capAnim,
+    fades:state.fade,motion:state.motion,beatSync:state.beat,codeSwitch:state.cs,
+    transition:state.transition,
     autoMusic:state.mus && state.musSrc==='auto',
     bgMusicPath:useUpload?state.bgMusicPath:null};
   if(scriptMode) payload.script=text; else payload.topic=text;
   if(state.bi) payload.voice2=$('#voice2').value; // bilingual works with topic OR script
+
+  // Multi-language one-shot: extra languages picked → fan out into N renders.
+  const extras = state.multi.filter(v=>v!==payload.voice);
+  if(extras.length){
+    payload.voices=extras;
+    const r=await fetch('/api/render/multi',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    const batch=await r.json();
+    if(batch.error){logLine(batch.error,'e');$('#go').disabled=false;return;}
+    logLine(`Making ${batch.jobs.length} videos: ${batch.jobs.map(j=>j.language).join(', ')}. Showing the first below — the rest appear in 🗂️ My projects when done.`);
+    stream(batch.jobs[0].jobId); // others render in the background
+    return;
+  }
 
   const r=await fetch('/api/render',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
@@ -877,6 +1025,15 @@ async function resizeCaptions(pid,size,btn){
 }
 
 function showResult(res){
+  // Shorts (#9): a batch of clips, not a single video.
+  if(res.shorts){
+    logLine(`Made ${res.shorts.length} shorts`,'s');
+    $('#resultBox').innerHTML = res.shorts.map((s,i)=>
+      `<div style="margin-bottom:14px"><div class="muted">Short ${i+1} · ${s.seconds}s</div>
+       <video controls src="/output/${s.file}" style="max-width:280px"></video><br>
+       <a class="dl" href="/output/${s.file}" download>⬇ Download</a></div>`).join('');
+    return;
+  }
   logLine('Render complete: '+res.title,'s');
   const music = res.music ? `<div class="muted">🎵 Music: ${res.music.name} — ${res.music.artist}</div>` : '';
   const lang = res.language && res.language!=='English' ? `<div class="muted">🗣️ Narrated in ${res.language}</div>` : '';
@@ -1020,6 +1177,83 @@ const E=(id)=>document.getElementById(id);
 
 E('openProjects').addEventListener('click',openProjects);
 E('pjClose').addEventListener('click',()=>E('projects').classList.remove('open'));
+
+// ===== Brand kit (#10) =====
+E('openBrand').addEventListener('click',openBrand);
+E('brClose').addEventListener('click',()=>E('brandModal').classList.remove('open'));
+E('sw-brIntro').closest('.tog').addEventListener('click',()=>{const on=E('sw-brIntro').classList.toggle('on');E('brIntroRow').style.display=on?'block':'none';});
+E('sw-brOutro').closest('.tog').addEventListener('click',()=>{const on=E('sw-brOutro').classList.toggle('on');E('brOutroRow').style.display=on?'block':'none';});
+E('brIntroSec').addEventListener('input',e=>E('brIntroLbl').textContent=(+e.target.value).toFixed(1)+'s');
+E('brOutroSec').addEventListener('input',e=>E('brOutroLbl').textContent=(+e.target.value).toFixed(1)+'s');
+let brandLogoPath=null;
+E('brLogo').addEventListener('change',async e=>{
+  const f=e.target.files[0]; if(!f)return; E('brLogoStatus').textContent='Uploading…';
+  const ext=(f.name.split('.').pop()||'png'); const buf=await f.arrayBuffer();
+  const r=await fetch('/api/logo?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf});
+  const d=await r.json(); if(d.path){brandLogoPath=d.path;E('brLogoStatus').textContent='✓ '+f.name;} else E('brLogoStatus').textContent='Upload failed';
+});
+async function openBrand(){
+  const b=await (await fetch('/api/brand')).json();
+  E('brName').value=b.name||''; brandLogoPath=b.logoPath||null;
+  E('brLogoStatus').textContent=b.logoPath?'✓ logo set':'';
+  E('brCapP').value=b.captionPrimary||'#ffd23f'; E('brCapS').value=b.captionSecondary||'#ffffff';
+  E('brCard0').value=(b.cardColors&&b.cardColors[0])||'#1a1206'; E('brCard1').value=(b.cardColors&&b.cardColors[1])||'#3a2a0c';
+  E('sw-brIntro').classList.toggle('on',!!b.intro.enabled); E('brIntroRow').style.display=b.intro.enabled?'block':'none';
+  E('brIntroText').value=b.intro.text||''; E('brIntroSec').value=b.intro.seconds; E('brIntroLbl').textContent=(+b.intro.seconds).toFixed(1)+'s';
+  E('sw-brOutro').classList.toggle('on',!!b.outro.enabled); E('brOutroRow').style.display=b.outro.enabled?'block':'none';
+  E('brOutroText').value=b.outro.text||''; E('brOutroSec').value=b.outro.seconds; E('brOutroLbl').textContent=(+b.outro.seconds).toFixed(1)+'s';
+  E('brandModal').classList.add('open');
+}
+E('brSave').addEventListener('click',async ()=>{
+  const body={ name:E('brName').value, logoPath:brandLogoPath,
+    captionPrimary:E('brCapP').value, captionSecondary:E('brCapS').value,
+    cardColors:[E('brCard0').value,E('brCard1').value],
+    intro:{enabled:E('sw-brIntro').classList.contains('on'),text:E('brIntroText').value,seconds:+E('brIntroSec').value},
+    outro:{enabled:E('sw-brOutro').classList.contains('on'),text:E('brOutroText').value,seconds:+E('brOutroSec').value} };
+  E('brStatus').textContent='Saving…';
+  const r=await fetch('/api/brand',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  E('brStatus').textContent=r.ok?'✓ Saved — applied to every new video.':'Save failed';
+});
+
+// ===== Dub a video (#2) + Make shorts (#9) =====
+let dubPath=null, shoPath=null;
+const segPick=(id,obj,key)=>E(id).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;[...E(id).children].forEach(x=>x.classList.remove('on'));b.classList.add('on');obj[key]=b.dataset.v;});
+const dubState={aspect:''}, shoState={aspect:'9:16'};
+segPick('dubAspect',dubState,'aspect'); segPick('shoAspect',shoState,'aspect');
+async function uploadVideo(file,statusEl){
+  statusEl.textContent='Uploading…'; const ext=(file.name.split('.').pop()||'mp4'); const buf=await file.arrayBuffer();
+  const r=await fetch('/api/clip?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf});
+  const d=await r.json(); if(d.path){statusEl.textContent='✓ '+file.name; return d.path;} statusEl.textContent='Upload failed'; return null;
+}
+E('openDub').addEventListener('click',()=>{
+  // Populate the dub voice list from every group.
+  const all=[...(VOICES.native||[]),...(VOICES.africa||[]),...(VOICES.global||[])];
+  E('dubVoice').innerHTML=all.map(v=>`<option value="${v.id}">${v.label}</option>`).join('');
+  E('dubModal').classList.add('open');
+});
+E('dubClose').addEventListener('click',()=>E('dubModal').classList.remove('open'));
+E('dubFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) dubPath=await uploadVideo(f,E('dubFileStatus'));});
+E('dubGo').addEventListener('click',async ()=>{
+  if(!dubPath){E('dubStatus').textContent='Upload a video first';return;}
+  const body={videoPath:dubPath,voice:E('dubVoice').value,subtitles:true}; if(dubState.aspect) body.aspect=dubState.aspect;
+  E('dubStatus').textContent='Starting…';
+  const r=await fetch('/api/dub',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json(); if(d.error){E('dubStatus').textContent=d.error;return;}
+  E('dubModal').classList.remove('open'); startStage('Dubbing…'); stream(d.jobId);
+});
+E('openShorts').addEventListener('click',()=>E('shortsModal').classList.add('open'));
+E('shoClose').addEventListener('click',()=>E('shortsModal').classList.remove('open'));
+E('shoCount').addEventListener('input',e=>E('shoCountLbl').textContent=e.target.value);
+E('shoFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) shoPath=await uploadVideo(f,E('shoFileStatus'));});
+E('shoGo').addEventListener('click',async ()=>{
+  if(!shoPath){E('shoStatus').textContent='Upload a video first';return;}
+  const body={videoPath:shoPath,count:+E('shoCount').value,aspect:shoState.aspect};
+  E('shoStatus').textContent='Starting…';
+  const r=await fetch('/api/shorts',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const d=await r.json(); if(d.error){E('shoStatus').textContent=d.error;return;}
+  E('shortsModal').classList.remove('open'); startStage('Cutting shorts…'); stream(d.jobId);
+});
+function startStage(lbl){$('#stage').style.display='block';$('#console').innerHTML='';$('#planBox').innerHTML='';$('#resultBox').innerHTML='';$('#stage').scrollIntoView({behavior:'smooth',block:'nearest'});setBar(0,lbl);}
 E('edClose').addEventListener('click',closeEditor);
 E('edPlay').addEventListener('click',togglePlay);
 E('edRewind').addEventListener('click',()=>seek(0));

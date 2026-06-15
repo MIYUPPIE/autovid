@@ -18,7 +18,11 @@ let _available = null;
 export async function transcriberAvailable() {
   if (_available !== null) return _available;
   try {
-    await execFileP('python3', ['-c', 'import faster_whisper'], { timeout: 15000 });
+    // find_spec checks the package is installed WITHOUT importing it (importing
+    // faster_whisper loads ctranslate2 and can take >15s) — keeps /api/health fast.
+    await execFileP('python3', ['-c',
+      'import importlib.util,sys; sys.exit(0 if importlib.util.find_spec("faster_whisper") else 1)'],
+      { timeout: 15000 });
     _available = true;
   } catch {
     _available = false;
