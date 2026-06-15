@@ -71,14 +71,15 @@
     -webkit-mask-image:radial-gradient(ellipse 80% 60% at 50% 0%,#000,transparent 75%);
   }
 
-  .wrap{max-width:1040px;margin:0 auto;animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
+  .wrap{max-width:1140px;margin:0 auto;animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
   @keyframes rise{from{opacity:0;transform:translateY(14px)}}
 
   /* ===== top nav bar ===== */
   .nav{display:flex;align-items:center;justify-content:space-between;gap:16px;
-    padding:13px 18px;margin-bottom:30px;border:1px solid var(--border);border-radius:18px;
-    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));
-    backdrop-filter:blur(20px);box-shadow:0 20px 50px -30px rgba(0,0,0,.8)}
+    padding:11px 16px;margin-bottom:30px;border:1px solid var(--border);border-radius:18px;
+    background:linear-gradient(180deg,rgba(20,16,10,.82),rgba(14,12,9,.7));
+    backdrop-filter:blur(22px);box-shadow:0 20px 50px -30px rgba(0,0,0,.8);
+    position:sticky;top:12px;z-index:40}
   .nav-brand{display:flex;align-items:center;gap:11px;text-decoration:none;color:var(--text)}
   .nav-name{font-size:19px;font-weight:800;letter-spacing:-.025em}
   .nav-name b{font-weight:800;background:var(--grad);-webkit-background-clip:text;
@@ -87,7 +88,6 @@
   .logo{width:38px;height:38px;border-radius:11px;display:grid;place-items:center;flex-shrink:0;
     color:#1a1206;background:var(--grad);
     box-shadow:0 8px 22px -8px rgba(245,158,11,.65),0 1px 0 rgba(255,255,255,.35) inset}
-  @media(max-width:640px){.nav{flex-wrap:wrap}.nav-right{width:100%;justify-content:space-between}}
 
   /* ===== hero ===== */
   .hero{margin-bottom:34px;max-width:720px;animation:rise .6s cubic-bezier(.2,.8,.2,1) both}
@@ -112,8 +112,7 @@
   .pill.no .ind{background:var(--no)}
 
   /* grid + cards */
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:20px}
-  @media(max-width:780px){.grid{grid-template-columns:1fr}}
+  .grid{display:grid;grid-template-columns:minmax(0,1.05fr) minmax(0,.95fr);gap:20px;align-items:start}
   .card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
     padding:26px;backdrop-filter:blur(20px);position:relative;overflow:hidden;
     box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 24px 60px -28px rgba(0,0,0,.7)}
@@ -308,7 +307,7 @@
   .editor.open{display:block;animation:rise .35s cubic-bezier(.2,.8,.2,1) both}
   .editor-inner{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
     gap:20px;align-items:start}
-  @media(max-width:880px){.editor-inner{grid-template-columns:1fr}}
+  @media(max-width:880px){.editor-inner{grid-template-columns:minmax(0,1fr)}}
   .ed-head{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px}
   .ed-head h2{font-size:22px;font-weight:800;letter-spacing:-.02em}
   .ed-head .x{background:var(--card);border:1px solid var(--border-2);color:var(--text);width:38px;height:38px;
@@ -455,6 +454,67 @@
     box-shadow:0 0 8px 1px rgba(245,158,11,.8)}
   .tl-playhead::before{content:"";position:absolute;top:0;left:-5px;border:6px solid transparent;
     border-top-color:var(--brand-1);border-bottom:none}
+
+  /* ============================================================
+     RESPONSIVE LAYOUT — mobile-first overrides, largest → smallest
+     ============================================================ */
+  .nav-tools{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
+
+  /* Tablet / small laptop */
+  @media(max-width:1024px){
+    .wrap{max-width:760px}
+    /* minmax(0,1fr) — NOT 1fr — so a wide child can't stretch the column past
+       the viewport (1fr's implicit auto min-width is the classic overflow trap). */
+    .grid{grid-template-columns:minmax(0,1fr);gap:16px}
+    .hero{margin-bottom:26px}
+  }
+
+  /* Phablet */
+  @media(max-width:680px){
+    body{padding:20px 14px 90px}
+    .nav{flex-direction:column;align-items:stretch;gap:12px;top:8px;padding:12px 14px}
+    .nav-right{width:100%;flex-direction:column;align-items:stretch;gap:10px}
+    .health{order:2;gap:6px}
+    .nav-tools{order:1;flex-wrap:nowrap;overflow-x:auto;justify-content:flex-start;
+      gap:8px;margin:-2px;padding:2px;scrollbar-width:none;-webkit-overflow-scrolling:touch}
+    .nav-tools::-webkit-scrollbar{display:none}
+    .nav-tools .ghost{flex:0 0 auto}
+    .pill{font-size:11px;padding:6px 10px}
+    .hero{margin-bottom:22px}
+    .sub{font-size:14px}
+    .card{padding:20px}
+    /* segmented controls wrap instead of squishing their labels */
+    .seg{flex-wrap:wrap}
+    .seg button{flex:1 1 auto;min-width:84px}
+    /* keep the main Generate button within thumb reach (not the modal buttons) */
+    #go{position:sticky;bottom:12px;margin-top:22px;z-index:30;
+      box-shadow:0 -6px 24px -8px rgba(0,0,0,.6),0 12px 40px -10px rgba(245,158,11,.6)}
+    /* modals fill the screen and scroll */
+    .editor{padding:0}
+    .editor-inner{max-width:100%!important;min-height:100%;gap:14px;
+      padding:18px 14px calc(18px + env(safe-area-inset-bottom));border-radius:0}
+    .ed-head h2{font-size:19px}
+    .sheet-inner{max-width:100%;border-radius:18px 18px 0 0;align-self:flex-end}
+    .stockgrid{grid-template-columns:1fr 1fr}
+  }
+
+  /* Small phone */
+  @media(max-width:400px){
+    body{padding:16px 11px 90px}
+    .card{padding:16px}
+    .nav-name{font-size:17px}
+    .logo{width:34px;height:34px}
+    .seg button{font-size:12px;padding:8px 6px;min-width:72px}
+    .tog{padding:11px 12px}
+    .tog span{font-size:12.5px}
+  }
+
+  /* Coarse-pointer (touch) — bigger tap targets everywhere */
+  @media(pointer:coarse){
+    .seg button{padding:11px 10px}
+    .ghost{padding:10px 14px}
+    .chips label{padding:8px 12px}
+  }
 </style>
 </head>
 <body>
@@ -471,14 +531,17 @@
     </a>
     <div class="nav-right">
       <div class="health" id="health"></div>
-      <button class="ghost" id="openBrand">🎨 Brand</button>
-      <button class="ghost" id="openDub" style="display:none">🎙️ Dub</button>
-      <button class="ghost" id="openShorts" style="display:none">✂️ Shorts</button>
-      <button class="ghost" id="openProjects">🗂️ My projects</button>
+      <div class="nav-tools">
+        <button class="ghost" id="openBrand">🎨 Brand</button>
+        <button class="ghost" id="openDub" style="display:none">🎙️ Dub</button>
+        <button class="ghost" id="openShorts" style="display:none">✂️ Shorts</button>
+        <button class="ghost" id="openProjects">🗂️ My projects</button>
+      </div>
     </div>
   </nav>
 
   <header class="hero">
+    <span class="eyebrow"><span class="dot"></span> AI Video Studio · 12+ languages</span>
     <h1>Turn any idea into a <span>finished video</span>.</h1>
     <div class="sub">GriotVid writes the script, pulls stock footage, narrates it in 12+ languages — including Yorùbá, Igbo and Hausa — burns word-by-word karaoke captions and auto-edits the cut.</div>
   </header>
