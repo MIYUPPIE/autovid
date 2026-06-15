@@ -107,10 +107,20 @@ GET  /api/projects              list saved projects
 GET  /api/project/:id           load the timeline doc
 PUT  /api/project/:id           save edits (validated, timeline relayed out)
 POST /api/project/:id/render    incremental re-render → poll /api/job/:id
+POST /api/clip?ext=mp4          upload replacement footage for a scene → { path }
 ```
 `npm run eval:render` proves the cache end-to-end with real ffmpeg (full render, then a caption-only edit that reuses every scene encode).
 
-> Next phase: the browser NLE on Remotion + designcombo. The plan/project doc maps 1:1 to a Remotion composition; `@remotion/player` gives real-time preview, and export stays on this nvenc pipeline.
+### Editing in the browser
+The editor is built into the UI — no separate app. After a render finishes, hit **✎ Edit this video**; to edit an older one, use **🗂️ My projects** in the header. The editor loads the timeline doc and exposes exactly the edits the incremental engine supports:
+
+- **Scenes** — reorder (▲/▼), delete, per-scene duration + source trim (in/out), Ken Burns motion on/off, and **Replace footage** (uploads via `/api/clip`, then re-encodes only that scene). A live `visual vs narration` length readout warns when footage runs short of (freeze) or past (cut) the voice.
+- **Captions** — on/off, edit each cue's text inline, font size, spoken/upcoming word colours, words-per-line.
+- **Audio & effects** — music volume + remove, add a track when there's none, fade in/out.
+
+**Save edits** PUTs the doc (server re-validates and relays out the timeline); **Re-render** saves first, then POSTs the incremental render and streams progress over SSE into the panel, swapping in the new MP4 when it's done. Each edit only re-runs the stale stages per the cost table above (verified live: caption edit → final only; reorder → concat + final; footage swap → that scene + concat + final).
+
+> Next phase: a full browser NLE on Remotion + designcombo for drag-on-a-timeline preview. The plan/project doc already maps 1:1 to a Remotion composition; `@remotion/player` gives real-time preview, and export stays on this nvenc pipeline.
 
 ## Notes
 - Stock licenses: Pexels & Pixabay are free for commercial use, no attribution required. Keep records if your platform needs them.

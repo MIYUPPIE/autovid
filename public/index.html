@@ -227,6 +227,73 @@
 
   footer{margin-top:48px;font-size:12px;text-align:center;color:var(--faint)}
   footer b{color:var(--muted);font-weight:600}
+
+  /* header projects button */
+  .ghost{display:inline-flex;align-items:center;gap:7px;font-size:12px;font-weight:600;
+    padding:8px 14px;border:1px solid var(--border-2);border-radius:999px;background:var(--card);
+    color:var(--text);cursor:pointer;font-family:inherit;transition:.15s}
+  .ghost:hover{background:var(--card-2);border-color:var(--brand-1)}
+
+  /* edit-this-video button under a result */
+  .editbtn{display:inline-flex;align-items:center;gap:8px;margin:16px 0 0 12px;background:var(--card-2);
+    color:var(--text);padding:13px 22px;border:1px solid var(--border-2);font-weight:700;font-size:14px;
+    border-radius:var(--radius-sm);cursor:pointer;font-family:inherit;transition:.15s;vertical-align:top}
+  .editbtn:hover{border-color:var(--brand-1);box-shadow:0 0 0 3px rgba(16,185,129,.18)}
+
+  /* editor overlay */
+  .editor{position:fixed;inset:0;z-index:50;background:rgba(6,6,10,.78);backdrop-filter:blur(10px);
+    display:none;overflow-y:auto;padding:32px 18px 80px}
+  .editor.open{display:block;animation:rise .35s cubic-bezier(.2,.8,.2,1) both}
+  .editor-inner{max-width:1100px;margin:0 auto;display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);
+    gap:20px;align-items:start}
+  @media(max-width:880px){.editor-inner{grid-template-columns:1fr}}
+  .ed-head{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:4px}
+  .ed-head h2{font-size:22px;font-weight:800;letter-spacing:-.02em}
+  .ed-head .x{background:var(--card);border:1px solid var(--border-2);color:var(--text);width:38px;height:38px;
+    border-radius:11px;cursor:pointer;font-size:18px;line-height:1;display:grid;place-items:center;transition:.15s}
+  .ed-head .x:hover{background:var(--no);color:#fff;border-color:transparent}
+  .panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px;
+    backdrop-filter:blur(20px)}
+  .panel h3{font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+    margin-bottom:14px;display:flex;align-items:center;gap:8px}
+  .sticky{position:sticky;top:18px}
+  .scene{border:1px solid var(--border);border-left:3px solid var(--brand-2);border-radius:12px;
+    padding:12px 13px;margin-bottom:11px;background:rgba(255,255,255,.02)}
+  .scene-top{display:flex;align-items:flex-start;gap:10px;justify-content:space-between}
+  .scene-idx{font-size:12px;font-weight:700;color:var(--brand-1);font-family:'JetBrains Mono',monospace;
+    background:var(--grad-soft);border:1px solid var(--border-2);padding:2px 8px;border-radius:7px;flex-shrink:0}
+  .scene-narr{font-size:13px;color:var(--text);line-height:1.45;flex:1}
+  .scene-ctl{display:flex;gap:6px;flex-shrink:0}
+  .iconbtn{width:30px;height:30px;border-radius:8px;border:1px solid var(--border);background:rgba(255,255,255,.03);
+    color:var(--muted);cursor:pointer;font-size:14px;line-height:1;display:grid;place-items:center;transition:.13s;font-family:inherit}
+  .iconbtn:hover:not(:disabled){color:var(--text);border-color:var(--border-2);background:var(--card-2)}
+  .iconbtn:disabled{opacity:.3;cursor:not-allowed}
+  .iconbtn.danger:hover{color:#fff;background:var(--no);border-color:transparent}
+  .scene-meta{display:flex;flex-wrap:wrap;gap:10px 14px;align-items:flex-end;margin-top:12px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field small{font-size:11px;font-weight:600;color:var(--muted)}
+  .field input[type=number]{width:84px;padding:8px 9px;font-size:13px}
+  .minitog{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:var(--text);cursor:pointer;user-select:none}
+  .replace{font-size:11px}
+  .replace input[type=file]{padding:6px 8px;font-size:11px;max-width:210px}
+  .cue{display:grid;grid-template-columns:64px 1fr;gap:9px;align-items:center;margin-bottom:8px}
+  .cue .tc{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--faint);text-align:right}
+  .cue input{padding:8px 10px;font-size:13px}
+  .swatch{display:flex;align-items:center;gap:9px;margin:8px 0}
+  .swatch input[type=color]{width:40px;height:32px;padding:2px;border-radius:8px;cursor:pointer;background:none}
+  .warn{font-size:12px;color:#FBBF24;margin-top:10px;display:none;line-height:1.45}
+  .warn.show{display:block}
+  .ed-actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}
+  .ed-actions .go{margin-top:0;flex:1;min-width:160px}
+  .savestate{font-size:12px;color:var(--muted);margin-top:10px;min-height:16px}
+  .savestate.ok{color:var(--ok)}
+  .savestate.err{color:var(--no)}
+  .proglist{max-height:60vh;overflow:auto;display:flex;flex-direction:column;gap:9px}
+  .proj{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);
+    border-radius:11px;padding:12px 14px;background:rgba(255,255,255,.02);cursor:pointer;transition:.13s}
+  .proj:hover{border-color:var(--brand-1);background:var(--card-2)}
+  .proj b{font-size:14px;font-weight:600;color:var(--text)}
+  .proj .meta{font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
 </style>
 </head>
 <body>
@@ -238,7 +305,10 @@
       <h1>Auto<span>Vid</span></h1>
       <div class="sub">AI script → stock footage → neural voiceover → karaoke captions → auto-edited cut.</div>
     </div>
-    <div class="health" id="health"></div>
+    <div style="display:flex;flex-direction:column;gap:10px;align-items:flex-end">
+      <button class="ghost" id="openProjects">🗂️ My projects</button>
+      <div class="health" id="health"></div>
+    </div>
   </header>
 
   <div class="grid">
@@ -372,6 +442,88 @@
   <footer><b>Stock footage</b> · <b>Neural voiceover</b> (incl. Yoruba / Igbo / Hausa) · <b>Karaoke captions</b> · <b>Automatic editing</b></footer>
 </div>
 
+<!-- ===== EDITOR OVERLAY ===== -->
+<div class="editor" id="editor">
+  <div class="editor-inner">
+    <div class="ed-head">
+      <h2 id="edTitleLbl">Edit video</h2>
+      <button class="x" id="edClose" title="Close">✕</button>
+    </div>
+
+    <!-- LEFT: scenes + captions -->
+    <div style="display:flex;flex-direction:column;gap:20px">
+      <div class="panel">
+        <h3>🎬 Scenes <span style="margin-left:auto;font-weight:600;text-transform:none;letter-spacing:0" id="edDur"></span></h3>
+        <div id="edScenes"></div>
+        <div class="warn" id="edLenWarn"></div>
+      </div>
+
+      <div class="panel">
+        <h3>📝 Captions</h3>
+        <label class="minitog" style="margin-bottom:6px">
+          <span class="sw" id="ed-capon"><i></i></span> Burned-in karaoke captions
+        </label>
+        <div id="edCapBody">
+          <div class="row" style="margin-top:14px">
+            <div class="field"><small>Font size (px, 0 = auto)</small>
+              <input type="number" id="edFont" min="0" max="200" step="1"></div>
+            <div class="field"><small>Max words / line</small>
+              <input type="number" id="edMaxWords" min="1" max="12" step="1"></div>
+          </div>
+          <div class="swatch"><input type="color" id="edPrimary"><span>Spoken word</span>
+            <input type="color" id="edSecondary" style="margin-left:14px"><span>Upcoming words</span></div>
+          <div id="edCues" style="margin-top:8px"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- RIGHT: preview + audio/effects + actions (sticky) -->
+    <div class="sticky" style="display:flex;flex-direction:column;gap:20px">
+      <div class="panel">
+        <h3>▶ Preview</h3>
+        <label style="margin-top:0">Title</label>
+        <input id="edTitle" type="text" placeholder="Video title">
+        <div id="edPreview" style="margin-top:14px"></div>
+      </div>
+
+      <div class="panel">
+        <h3>🎵 Audio & effects</h3>
+        <div id="edMusicBox"></div>
+        <div class="toggles" style="margin-top:14px">
+          <div class="tog"><span>🎬 Fade in / out</span>
+            <div class="sw" id="ed-fades"><i></i></div></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="ed-actions">
+          <button class="ghost" id="edSave" style="padding:16px 22px">💾 Save edits</button>
+          <button class="go" id="edRender">⟳ Re-render</button>
+        </div>
+        <div class="savestate" id="edSaveState"></div>
+        <div id="edProgress" style="display:none;margin-top:14px">
+          <div class="barwrap"><div class="bar"><i id="edBar"></i></div><span id="edPct">0%</span></div>
+          <div class="stagelbl" id="edStage" style="margin-bottom:10px">Working…</div>
+          <div class="console" id="edConsole" style="height:140px"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== PROJECTS PICKER ===== -->
+<div class="editor" id="projects">
+  <div class="editor-inner" style="grid-template-columns:1fr;max-width:620px">
+    <div class="ed-head">
+      <h2>My projects</h2>
+      <button class="x" id="pjClose" title="Close">✕</button>
+    </div>
+    <div class="panel">
+      <div class="proglist" id="pjList"><div class="muted">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
@@ -452,7 +604,8 @@ $('#musFile').addEventListener('change',async e=>{
   $('#musStatus').textContent='Uploading…';
   const ext=(f.name.split('.').pop()||'mp3');
   const buf=await f.arrayBuffer();
-  const r=await fetch('/api/music?ext='+ext,{method:'POST',body:buf});
+  const r=await fetch('/api/music?ext='+ext,{method:'POST',
+    headers:{'Content-Type':'application/octet-stream'},body:buf});
   const d=await r.json();
   if(d.path){state.bgMusicPath=d.path;$('#musStatus').textContent='✓ '+f.name;}
   else $('#musStatus').textContent='Upload failed';
@@ -561,9 +714,12 @@ function showResult(res){
       <button data-v="XL">X-Large</button>
     </div>
     <div class="muted" id="capStatus" style="margin-top:6px"></div>` : '';
+  // Full editor (scenes, captions, audio, footage swap) for the deeper edits.
+  const edit = res.projectId
+    ? `<button class="editbtn" onclick="openEditor('${res.projectId}')">✎ Edit this video</button>` : '';
   $('#resultBox').innerHTML=
     `<video id="resultVideo" controls src="/output/${res.file}"></video>${lang}${music}${capCtl}<br>
-     <a class="dl" id="resultDl" href="/output/${res.file}" download>⬇ Download MP4</a>`;
+     <a class="dl" id="resultDl" href="/output/${res.file}" download>⬇ Download MP4</a>${edit}`;
   if(capCtl){
     const cur=state.capSize||'M';
     [...$('#capResize').children].forEach(b=>b.classList.toggle('on',b.dataset.v===cur));
@@ -578,6 +734,257 @@ function showResult(res){
        <div class="muted">query: ${s.usedQuery||s.query} · ${s.durationSec}s</div></div>`).join('');
   }
 }
+
+/* ============================ EDITOR ============================ */
+const esc = (s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const fmt = (s)=>{const x=Math.max(0,Number(s)||0);const m=Math.floor(x/60),ss=(x-m*60);return `${m}:${ss.toFixed(1).padStart(4,'0')}`;};
+// ASS colours are &HAABBGGRR. Convert to/from a #rrggbb the <input type=color> understands.
+function assToHex(a){if(!a)return '#ff ff00'.replace(' ','');const m=a.replace(/&H/i,'').padStart(8,'0').toUpperCase();
+  return ('#'+m.slice(6,8)+m.slice(4,6)+m.slice(2,4)).toLowerCase();}
+function hexToAss(h){const m=(h||'#ffffff').replace('#','');return ('&H00'+m.slice(4,6)+m.slice(2,4)+m.slice(0,2)).toUpperCase();}
+
+let proj=null;          // the loaded project document (edits mutate this)
+let edBusy=false;       // true while re-rendering
+
+document.getElementById('openProjects').addEventListener('click',openProjects);
+document.getElementById('pjClose').addEventListener('click',()=>document.getElementById('projects').classList.remove('open'));
+document.getElementById('edClose').addEventListener('click',closeEditor);
+
+async function openProjects(){
+  const box=document.getElementById('projects'); box.classList.add('open');
+  const list=document.getElementById('pjList'); list.innerHTML='<div class="muted">Loading…</div>';
+  try{
+    const {projects}=await (await fetch('/api/projects')).json();
+    if(!projects.length){list.innerHTML='<div class="muted">No saved videos yet. Generate one first.</div>';return;}
+    list.innerHTML=projects.map(p=>
+      `<div class="proj" onclick="openEditor('${p.id}')">
+         <div><b>${esc(p.title||'Untitled')}</b>
+           <div class="meta">${p.aspect} · ${fmt(p.duration)} · ${new Date(p.updatedAt||0).toLocaleString()}</div></div>
+         <span class="iconbtn">✎</span></div>`).join('');
+  }catch(e){list.innerHTML='<div class="muted">Could not load projects.</div>';}
+}
+
+async function openEditor(id){
+  document.getElementById('projects').classList.remove('open');
+  try{
+    const r=await fetch('/api/project/'+id);
+    if(!r.ok){alert('Project not found');return;}
+    proj=await r.json();
+  }catch(e){alert('Could not load project');return;}
+  proj.captions=proj.captions||{enabled:false,cues:[],style:{}};
+  proj.captions.style=proj.captions.style||{};
+  proj.effects=proj.effects||{};
+  document.getElementById('editor').classList.add('open');
+  document.getElementById('edProgress').style.display='none';
+  setSaveState('');
+  renderEditor();
+}
+function closeEditor(){ if(edBusy && !confirm('A re-render is running. Close anyway?'))return;
+  document.getElementById('editor').classList.remove('open'); proj=null; edBusy=false; }
+
+function renderEditor(){
+  document.getElementById('edTitleLbl').textContent='Edit · '+(proj.title||'Untitled');
+  document.getElementById('edTitle').value=proj.title||'';
+  // preview (cache-bust so a re-rendered file refreshes)
+  document.getElementById('edPreview').innerHTML=
+    `<video controls src="/output/${proj.id}_final.mp4?t=${Date.now()}"></video>
+     <a class="dl" style="margin-top:12px" href="/output/${proj.id}_final.mp4" download>⬇ Download MP4</a>`;
+  renderScenes();
+  renderCaptions();
+  renderAudio();
+  // fades toggle
+  setSw('ed-fades', proj.effects.fades!==false);
+  bindOnce(document.getElementById('ed-fades').closest('.tog'),'click',()=>{
+    proj.effects.fades=toggleSw('ed-fades'); });
+  document.getElementById('edTitle').oninput=e=>proj.title=e.target.value;
+  document.getElementById('edSave').onclick=()=>saveProject().then(ok=>ok&&setSaveState('Saved.','ok'));
+  document.getElementById('edRender').onclick=reRender;
+}
+
+/* ---- scenes ---- */
+function renderScenes(){
+  const wrap=document.getElementById('edScenes');
+  wrap.innerHTML=proj.scenes.map((s,i)=>{
+    const up=i===0?'disabled':'', down=i===proj.scenes.length-1?'disabled':'';
+    const del=proj.scenes.length<=1?'disabled':'';
+    const t=s.trim||{};
+    return `<div class="scene">
+      <div class="scene-top">
+        <span class="scene-idx">#${i+1}</span>
+        <div class="scene-narr">${esc(s.narration)||'<span class="muted">(no narration text)</span>'}</div>
+        <div class="scene-ctl">
+          <button class="iconbtn" ${up} onclick="moveScene(${i},-1)" title="Move up">▲</button>
+          <button class="iconbtn" ${down} onclick="moveScene(${i},1)" title="Move down">▼</button>
+          <button class="iconbtn danger" ${del} onclick="deleteScene(${i})" title="Delete scene">🗑</button>
+        </div>
+      </div>
+      <div class="scene-meta">
+        <div class="field"><small>Duration (s)</small>
+          <input type="number" min="0.5" step="0.1" value="${(+s.duration).toFixed(1)}" oninput="setScene(${i},'duration',this.value)"></div>
+        <div class="field"><small>Trim in (s)</small>
+          <input type="number" min="0" step="0.1" value="${t.in!=null?t.in:''}" placeholder="0" oninput="setTrim(${i},'in',this.value)"></div>
+        <div class="field"><small>Trim out (s)</small>
+          <input type="number" min="0" step="0.1" value="${t.out!=null?t.out:''}" placeholder="end" oninput="setTrim(${i},'out',this.value)"></div>
+        <label class="minitog"><span class="sw ${s.motion!==false?'on':''}" onclick="toggleMotion(${i},this)"><i></i></span> Motion</label>
+        <label class="field replace"><small>Replace footage</small>
+          <input type="file" accept="video/*" onchange="replaceFootage(${i},this)"></label>
+        <span class="muted replaceStatus" id="rs${i}"></span>
+      </div>
+    </div>`;
+  }).join('');
+  updateDuration();
+}
+function moveScene(i,dir){const j=i+dir;if(j<0||j>=proj.scenes.length)return;
+  const a=proj.scenes;[a[i],a[j]]=[a[j],a[i]];renderScenes();}
+function deleteScene(i){if(proj.scenes.length<=1)return;proj.scenes.splice(i,1);renderScenes();}
+function setScene(i,key,val){proj.scenes[i][key]=parseFloat(val)||0;updateDuration();}
+function setTrim(i,key,val){const s=proj.scenes[i];s.trim=s.trim||{};
+  if(val===''||val==null){delete s.trim[key];} else {s.trim[key]=parseFloat(val)||0;}
+  if(s.trim.in==null&&s.trim.out==null)s.trim=null;}
+function toggleMotion(i,el){const on=el.classList.toggle('on');proj.scenes[i].motion=on;}
+async function replaceFootage(i,input){
+  const f=input.files[0];if(!f)return;const st=document.getElementById('rs'+i);st.textContent='Uploading…';
+  try{
+    const ext=(f.name.split('.').pop()||'mp4');
+    const r=await fetch('/api/clip?ext='+ext,{method:'POST',
+      headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
+    const d=await r.json();
+    if(d.path){proj.scenes[i].source={path:d.path};proj.scenes[i].clip={path:null};proj.scenes[i].trim=null;
+      st.textContent='✓ '+f.name+' (re-encodes on render)';st.className='muted replaceStatus';st.style.color='var(--ok)';}
+    else st.textContent='Upload failed';
+  }catch(e){st.textContent='Upload failed';}
+}
+function updateDuration(){
+  const visual=proj.scenes.reduce((a,s)=>a+(+s.duration||0),0);
+  const narr=proj.audio?.voiceTrack?.duration||0;
+  document.getElementById('edDur').textContent=`visual ${fmt(visual)} · narration ${fmt(narr)}`;
+  const w=document.getElementById('edLenWarn');const diff=visual-narr;
+  if(narr&&diff<-0.3){w.className='warn show';
+    w.textContent=`⚠ Footage is ${Math.abs(diff).toFixed(1)}s shorter than the narration — the video will freeze on the last frame while the voice keeps going. Add duration or a scene.`;}
+  else if(narr&&diff>0.5){w.className='warn show';
+    w.textContent=`⚠ Footage is ${diff.toFixed(1)}s longer than the narration — the tail past ${fmt(narr)} is cut to match the voice.`;}
+  else w.className='warn';
+}
+
+/* ---- captions ---- */
+function renderCaptions(){
+  const c=proj.captions, st=c.style||{};
+  setSw('ed-capon', c.enabled!==false);
+  document.getElementById('edFont').value=st.fontSize||0;
+  document.getElementById('edMaxWords').value=st.maxWords||6;
+  document.getElementById('edPrimary').value=assToHex(st.primary||'&H0000FFFF');
+  document.getElementById('edSecondary').value=assToHex(st.secondary||'&H00FFFFFF');
+  document.getElementById('edCues').innerHTML=(c.cues||[]).map((q,i)=>
+    `<div class="cue"><span class="tc">${fmt(q.start)}</span>
+      <input value="${esc(q.text)}" oninput="setCue(${i},this.value)"></div>`).join('')
+    || '<div class="muted">No caption cues.</div>';
+  document.getElementById('edCapBody').style.opacity=c.enabled!==false?'1':'.4';
+  bindOnce(document.getElementById('ed-capon').closest('.minitog'),'click',()=>{
+    proj.captions.enabled=toggleSw('ed-capon');
+    document.getElementById('edCapBody').style.opacity=proj.captions.enabled?'1':'.4';});
+  document.getElementById('edFont').oninput=e=>setStyle('fontSize',parseInt(e.target.value)||0);
+  document.getElementById('edMaxWords').oninput=e=>setStyle('maxWords',parseInt(e.target.value)||6);
+  document.getElementById('edPrimary').oninput=e=>setStyle('primary',hexToAss(e.target.value));
+  document.getElementById('edSecondary').oninput=e=>setStyle('secondary',hexToAss(e.target.value));
+}
+function setCue(i,val){proj.captions.cues[i].text=val;}
+function setStyle(key,val){proj.captions.style=proj.captions.style||{};
+  if(!val&&key==='fontSize')delete proj.captions.style[key];else proj.captions.style[key]=val;}
+
+/* ---- audio ---- */
+function renderAudio(){
+  const box=document.getElementById('edMusicBox');const m=proj.audio?.music;
+  if(m){
+    const vol=typeof m.volume==='number'?m.volume:0.12;
+    const name=m.meta?`${esc(m.meta.name||'track')} — ${esc(m.meta.artist||'')}`:'Background music';
+    box.innerHTML=`<label style="margin-top:0">🎵 ${name}</label>
+      <div class="row" style="align-items:center;gap:14px">
+        <input type="range" id="edVol" min="0" max="0.5" step="0.01" value="${vol}">
+        <span class="lenval" id="edVolLbl">${Math.round(vol*100)}%</span>
+      </div>
+      <button class="ghost" style="margin-top:12px" onclick="removeMusic()">✕ Remove music</button>`;
+    document.getElementById('edVol').oninput=e=>{const v=parseFloat(e.target.value);
+      proj.audio.music.volume=v;document.getElementById('edVolLbl').textContent=Math.round(v*100)+'%';};
+  }else{
+    box.innerHTML=`<label style="margin-top:0">🎵 Background music</label>
+      <div class="muted">No music on this video.</div>
+      <label class="replace" style="margin-top:10px">Add a track (mp3/wav, looped & ducked)</label>
+      <input type="file" accept="audio/*" onchange="addMusic(this)">
+      <div class="muted" id="edMusStatus"></div>`;
+  }
+}
+function removeMusic(){proj.audio.music=null;renderAudio();}
+async function addMusic(input){
+  const f=input.files[0];if(!f)return;const st=document.getElementById('edMusStatus');st.textContent='Uploading…';
+  try{
+    const ext=(f.name.split('.').pop()||'mp3');
+    const r=await fetch('/api/music?ext='+ext,{method:'POST',
+      headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
+    const d=await r.json();
+    if(d.path){proj.audio.music={path:d.path,volume:0.12,meta:{name:f.name,artist:'uploaded'}};renderAudio();}
+    else st.textContent='Upload failed';
+  }catch(e){st.textContent='Upload failed';}
+}
+
+/* ---- save / re-render ---- */
+async function saveProject(){
+  setSaveState('Saving…');
+  try{
+    const r=await fetch('/api/project/'+proj.id,{method:'PUT',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(proj)});
+    const d=await r.json();
+    if(!r.ok){setSaveState((d.validation||[d.error]).join('; '),'err');return false;}
+    proj=d.project;            // server relaid out the timeline (scene start times)
+    renderScenes();            // reflect recomputed starts/duration
+    return true;
+  }catch(e){setSaveState('Save failed: '+e.message,'err');return false;}
+}
+async function reRender(){
+  if(edBusy)return;
+  if(!await saveProject()){return;}            // never render a stale/invalid doc
+  edBusy=true;
+  document.getElementById('edRender').disabled=true;
+  document.getElementById('edSave').disabled=true;
+  const prog=document.getElementById('edProgress');prog.style.display='block';
+  const con=document.getElementById('edConsole');con.innerHTML='';
+  edBar(0,'Submitting…');setSaveState('');
+  let jobId;
+  try{
+    const r=await fetch('/api/project/'+proj.id+'/render',{method:'POST'});
+    const d=await r.json();
+    if(!r.ok||!d.jobId){throw new Error(d.error||'could not start render');}
+    jobId=d.jobId;
+  }catch(e){edLog('FAILED: '+e.message,'e');finishRender();return;}
+  const es=new EventSource(`/api/job/${jobId}/stream`);
+  es.onmessage=ev=>{const d=JSON.parse(ev.data);
+    if(d.progress)edBar(d.progress.pct,d.progress.stage);
+    edLog(`[${d.stage}] ${d.message}`,d.stage==='error'?'e':'');};
+  es.addEventListener('end',ev=>{es.close();const d=JSON.parse(ev.data);
+    if(d.status==='done'){edLog('Re-render complete','s');
+      document.getElementById('edPreview').innerHTML=
+        `<video controls autoplay src="/output/${proj.id}_final.mp4?t=${Date.now()}"></video>
+         <a class="dl" style="margin-top:12px" href="/output/${proj.id}_final.mp4" download>⬇ Download MP4</a>`;
+      if(d.result&&d.result.plan)edLog('Reused cache where possible · scenes re-encoded: ['+
+        (d.result.plan.scenesRerendered||[]).join(', ')+']','s');}
+    else edLog('FAILED: '+(d.error||'unknown'),'e');
+    finishRender();});
+  es.onerror=()=>{es.close();edLog('Connection lost','e');finishRender();};
+}
+function finishRender(){edBusy=false;
+  document.getElementById('edRender').disabled=false;
+  document.getElementById('edSave').disabled=false;}
+
+/* ---- small editor helpers ---- */
+function edBar(p,lbl){document.getElementById('edBar').style.width=p+'%';
+  document.getElementById('edPct').textContent=p+'%';if(lbl)document.getElementById('edStage').textContent=lbl;}
+function edLog(t,cls){const c=document.getElementById('edConsole');const d=document.createElement('div');
+  d.className=cls||'';d.textContent='› '+t;c.appendChild(d);c.scrollTop=c.scrollHeight;}
+function setSaveState(t,cls){const e=document.getElementById('edSaveState');e.textContent=t||'';e.className='savestate '+(cls||'');}
+function setSw(id,on){document.getElementById(id).classList.toggle('on',!!on);}
+function toggleSw(id){return document.getElementById(id).classList.toggle('on');}
+// keep the visual sw in sync when its label is clicked (sw itself isn't the click target)
+const _bound=new WeakSet();
+function bindOnce(el,ev,fn){if(!el||_bound.has(el))return;_bound.add(el);el.addEventListener(ev,fn);}
 </script>
 </body>
 </html>

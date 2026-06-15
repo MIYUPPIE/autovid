@@ -681,3 +681,23 @@ test('http: GET /api/projects lists saved projects', async () => {
     assert.ok(ids.includes('http3'));
   });
 });
+
+test('http: POST /api/clip stores a replacement clip and returns its path', async () => {
+  config.dirs.raw = fs.mkdtempSync(path.join(os.tmpdir(), 'av_gate_raw_'));
+  await withServer(async (base) => {
+    // Empty body → 400.
+    const empty = await fetch(`${base}/api/clip`, { method: 'POST', body: Buffer.alloc(0) });
+    assert.equal(empty.status, 400);
+
+    // Real bytes → 200 with a path inside the raw dir; the file exists on disk.
+    const bytes = Buffer.from('fake mp4 bytes');
+    const res = await fetch(`${base}/api/clip?ext=mp4`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: bytes,
+    });
+    assert.equal(res.status, 200);
+    const { path: saved } = await res.json();
+    assert.ok(saved.startsWith(config.dirs.raw), 'clip is written under the raw dir');
+    assert.ok(saved.endsWith('.mp4'));
+    assert.equal(fs.readFileSync(saved).length, bytes.length, 'bytes round-trip to disk');
+  });
+});
