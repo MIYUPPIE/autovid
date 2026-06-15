@@ -2,7 +2,7 @@ import path from 'path';
 import { nanoid } from 'nanoid';
 import { config } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
-import { findClipCandidates, downloadClip, orientationFor, clipKey } from './stock.js';
+import { findClipCandidates, downloadClip, orientationFor, clipKey, localizeQuery } from './stock.js';
 import { synthesizeVoice, synthesizeMany } from './voice.js';
 import { buildKaraokeAss, parseSrt } from './captions.js';
 import { getVoice } from './voices.js';
@@ -166,7 +166,7 @@ export function runPipeline(opts) {
       const {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
-        captionStyle = {},
+        captionStyle = {}, codeSwitch = false,
       } = opts;
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
@@ -187,7 +187,7 @@ export function runPipeline(opts) {
         plan = await planFromScript({ script, context, language });
       } else {
         emit(job, 'planning', `Writing the script with Grok (${language})…`, 5);
-        plan = await generateVideoPlan({ topic, context, targetSeconds, tone, language });
+        plan = await generateVideoPlan({ topic, context, targetSeconds, tone, language, codeSwitch });
       }
       job.plan = plan;
       const n = plan.scenes.length;
@@ -269,7 +269,7 @@ export function runPipeline(opts) {
         const lead = i % 2 === 0 ? 'pexels' : 'pixabay';
         const minDur = durations[i]; // prefer a clip that covers the scene without looping
         let acquired = await acquireFootage({
-          queries: [scene.query], orientation, base, used: usedClips, lead, minDur,
+          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur,
           onAttempt: (q, clip) =>
             emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / n) * 55)),
         });

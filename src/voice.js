@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import fetch from 'node-fetch';
 import { config } from './config.js';
-import { getVoice } from './voices.js';
+import { getVoice, edgeVoiceName } from './voices.js';
 
 const execFileP = promisify(execFile);
 
@@ -40,7 +40,7 @@ export async function synthesizeVoice({ text, voice, rate = '+0%', pitch = '+0Hz
   if (engine === 'yarn') {
     return synthYarn({ text, yarnVoice: meta.yarnVoice, rate, outBase, onProgress });
   }
-  return synthEdge({ text, voice, rate, pitch, outBase });
+  return synthEdge({ text, voice: edgeVoiceName(voice), rate, pitch, outBase });
 }
 
 async function synthEdge({ text, voice, rate, pitch, outBase }) {
@@ -216,7 +216,7 @@ export async function synthesizeMany({ items, voice, rate = '+0%' }) {
   for (const it of items) {
     const r = meta?.engine === 'yarn'
       ? await synthYarn({ text: it.text, yarnVoice: meta.yarnVoice, rate, outBase: it.outBase })
-      : await synthEdge({ text: it.text, voice, rate, pitch: '+0Hz', outBase: it.outBase });
+      : await synthEdge({ text: it.text, voice: edgeVoiceName(voice), rate, pitch: '+0Hz', outBase: it.outBase });
     out.push({ id: it.id, audioPath: r.audioPath, duration: r.duration });
   }
   return out;

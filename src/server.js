@@ -95,11 +95,12 @@ app.post('/api/render', (req, res) => {
   const fades = b.fades !== false;
   const motion = b.motion !== false; // Ken Burns on by default
   const autoMusic = Boolean(b.autoMusic);
+  const codeSwitch = Boolean(b.codeSwitch); // mix in natural English the way bilingual speakers do
   const bgMusicPath = b.bgMusicPath && fs.existsSync(b.bgMusicPath) ? b.bgMusicPath : null;
 
   const id = runPipeline({
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic,
+    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch,
   });
   res.json({ jobId: id });
 });

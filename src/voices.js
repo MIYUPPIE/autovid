@@ -3,10 +3,18 @@
 //           'yarn'  → YarnGPT hosted Nigerian-language TTS (Yoruba/Igbo/Hausa)
 //   lang:   the language Grok must WRITE the narration in (stock queries stay English)
 //   yarnVoice: the YarnGPT speaker name to use when engine === 'yarn'
+//   edgeVoice: the REAL edge-tts voice name to synthesize with, when the catalogue
+//              id is a logical alias (e.g. Pidgin reuses the en-NG neural voices).
+//              Falls back to the id itself for plain edge voices.
 
 export const VOICES = {
   // Native-language neural voices — the script is written in that language.
   native: [
+    // Nigerian Pidgin — the real lingua franca. No native TTS exists for it, so we
+    // narrate with the en-NG neural voices (they read Pidgin convincingly) while
+    // Grok writes the script in Pidgin. CapCut has nothing here.
+    { id: 'pcm-NG-EzinnePidgin', label: 'Naija Pidgin — Ezinne (F)',          gender: 'Female',  engine: 'edge', edgeVoice: 'en-NG-EzinneNeural', locale: 'en-NG', lang: 'Nigerian Pidgin' },
+    { id: 'pcm-NG-AbeoPidgin',   label: 'Naija Pidgin — Abeo (M)',            gender: 'Male',    engine: 'edge', edgeVoice: 'en-NG-AbeoNeural',   locale: 'en-NG', lang: 'Nigerian Pidgin' },
     { id: 'yarn-yor-f',          label: 'Yorùbá — Idera (F, melodic)',       gender: 'Female',  engine: 'yarn', yarnVoice: 'Idera',    locale: 'yo-NG', lang: 'Yoruba' },
     { id: 'yarn-yor-m',          label: 'Yorùbá — Femi (M, rich)',           gender: 'Male',    engine: 'yarn', yarnVoice: 'Femi',     locale: 'yo-NG', lang: 'Yoruba' },
     { id: 'yarn-ibo-f',          label: 'Igbo — Chinenye (F, warm)',         gender: 'Female',  engine: 'yarn', yarnVoice: 'Chinenye', locale: 'ig-NG', lang: 'Igbo' },
@@ -52,6 +60,13 @@ export function allVoiceIds() {
 
 export function getVoice(id) {
   return ALL.find((v) => v.id === id) || null;
+}
+
+// The real edge-tts voice name to synthesize with. Logical aliases (e.g. Pidgin)
+// carry an explicit `edgeVoice`; plain edge voices use their id directly.
+export function edgeVoiceName(id) {
+  const v = getVoice(id);
+  return (v && v.edgeVoice) || id;
 }
 
 export function isValidVoice(id) {

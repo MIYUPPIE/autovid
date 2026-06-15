@@ -18,12 +18,49 @@ export function parseJsonLoose(text) {
   return JSON.parse(slice);
 }
 
+// Is this the (English-based, code-switching) Nigerian Pidgin pseudo-language?
+function isPidgin(language) {
+  return /pidgin/i.test(language || '');
+}
+
+/**
+ * The language-specific writing + TTS-pronunciation instruction block shared by
+ * every planner. Three regimes:
+ *  - English → plain English.
+ *  - Nigerian Pidgin → English-based creole; KEEP its natural English/Yoruba/Igbo
+ *    code-switching (telling it to "avoid loanwords" would break Pidgin).
+ *  - any other language → write natively, spell numbers out, keep diacritics.
+ * `codeSwitch` optionally asks any language to mix in natural English the way
+ * real speakers do (e.g. Yoruba sprinkled with English) — off by default.
+ */
+export function languageNote(language = 'English', { codeSwitch = false } = {}) {
+  if (isPidgin(language)) {
+    return `Write EVERY "narration", "hook", "outro" and "title" in natural NIGERIAN PIDGIN — the way people actually talk on the street in Lagos. It is an English-based creole, so KEEP its natural code-switching (English with sprinkles of Yoruba/Igbo/Hausa) and Pidgin grammar (e.g. "dey", "na", "wetin", "abeg", "make we"). Do NOT write standard English; do NOT translate stiffly.
+- Spell out numbers and years as words.
+IMPORTANT: keep every "query" field in ENGLISH (they are stock-footage search terms for Pexels/Pixabay).`;
+  }
+  const nonEnglish = language && language.toLowerCase() !== 'english';
+  if (!nonEnglish) {
+    const cs = codeSwitch ? ' You may sprinkle in natural English words the way real bilingual speakers do.' : '';
+    return `Write all narration in natural, vivid English.${cs}`;
+  }
+  const cs = codeSwitch
+    ? `\n- Code-switch naturally: mix in common English words/phrases where a real bilingual ${language} speaker would, but keep the sentence grammar ${language}.`
+    : '';
+  return `Write EVERY "narration", the "hook", the "outro" and the "title" in ${language} — natural, fluent, idiomatic ${language} as a native speaker would say it. Do NOT translate word-for-word from English; write it natively.
+For clean text-to-speech pronunciation in ${language}:
+- Spell out ALL numbers, years and dates as ${language} words (never digits like "1829").
+- Use correct ${language} spelling and tone/diacritic marks throughout.
+- Avoid English/Latin loanwords, abbreviations, acronyms and symbols; write them out in ${language}.${cs}
+IMPORTANT: keep every "query" field in ENGLISH (they are stock-footage search terms for Pexels/Pixabay).`;
+}
+
 /**
  * Generate a full video plan from a topic.
  * Returns { title, hook, scenes: [{ index, narration, query, durationSec }], outro }
  * Each scene's `query` is a stock-footage search term; `narration` is voiceover text.
  */
-export async function generateVideoPlan({ topic, context, targetSeconds = 60, tone = 'engaging', language = 'English' }) {
+export async function generateVideoPlan({ topic, context, targetSeconds = 60, tone = 'engaging', language = 'English', codeSwitch = false }) {
   const regionNote =
     context === 'africa'
       ? 'The audience and framing are African. Prefer culturally relevant references and stock-footage queries that return African scenes, people, and settings where appropriate.'
@@ -32,15 +69,7 @@ export async function generateVideoPlan({ topic, context, targetSeconds = 60, to
   // Fewer, longer scenes → less choppy and faster to render.
   const sceneCount = Math.max(3, Math.min(config.maxScenes, Math.round(targetSeconds / config.secondsPerScene)));
 
-  const nonEnglish = language && language.toLowerCase() !== 'english';
-  const langNote = nonEnglish
-    ? `Write EVERY "narration", the "hook", the "outro" and the "title" in ${language} — natural, fluent, idiomatic ${language} as a native speaker would say it. Do NOT translate word-for-word from English; write it natively.
-For clean text-to-speech pronunciation in ${language}:
-- Spell out ALL numbers, years and dates as ${language} words (never digits like "1829").
-- Use correct ${language} spelling and tone/diacritic marks throughout.
-- Avoid English/Latin loanwords, abbreviations, acronyms and symbols; write them out in ${language}.
-IMPORTANT: keep every "query" field in ENGLISH (they are stock-footage search terms for Pexels/Pixabay).`
-    : 'Write all narration in natural, vivid English.';
+  const langNote = languageNote(language, { codeSwitch });
 
   const sys = `You are an award-winning short-form video director and scriptwriter.
 You output ONLY valid JSON. No markdown, no commentary.
