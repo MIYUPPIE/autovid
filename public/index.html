@@ -240,6 +240,42 @@
     border-radius:var(--radius-sm);cursor:pointer;font-family:inherit;transition:.15s;vertical-align:top}
   .editbtn:hover{border-color:var(--brand-1);box-shadow:0 0 0 3px rgba(16,185,129,.18)}
 
+  /* share-this-video button under a result (mirrors .editbtn, brand-filled) */
+  .sharebtn{display:inline-flex;align-items:center;gap:8px;margin:16px 0 0 12px;
+    background:var(--grad-soft);color:#fff;padding:13px 22px;border:1px solid var(--brand-1);font-weight:700;
+    font-size:14px;border-radius:var(--radius-sm);cursor:pointer;font-family:inherit;transition:.15s;vertical-align:top}
+  .sharebtn:hover{box-shadow:0 0 0 3px rgba(16,185,129,.22);transform:translateY(-1px)}
+
+  /* share sheet (centered dialog over a dim backdrop) */
+  .sheet{position:fixed;inset:0;z-index:60;background:rgba(6,6,10,.78);backdrop-filter:blur(10px);
+    display:none;overflow-y:auto;padding:40px 18px}
+  .sheet.open{display:grid;place-items:start center;animation:rise .3s cubic-bezier(.2,.8,.2,1) both}
+  .sheet-inner{width:100%;max-width:480px;background:var(--card);border:1px solid var(--border);
+    border-radius:var(--radius);padding:22px;backdrop-filter:blur(20px)}
+  .sheet-head{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:6px}
+  .sheet-head h2{font-size:20px;font-weight:800;letter-spacing:-.02em}
+  .sheet .native{width:100%;margin:14px 0 4px;background:var(--grad-soft);color:#fff;border:1px solid var(--brand-1);
+    padding:14px;border-radius:var(--radius-sm);font-weight:700;font-size:15px;cursor:pointer;font-family:inherit;
+    display:flex;align-items:center;justify-content:center;gap:9px;transition:.15s}
+  .sheet .native:hover{box-shadow:0 0 0 3px rgba(16,185,129,.22)}
+  .sheet .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:14px 0}
+  .sheet .net{display:flex;flex-direction:column;align-items:center;gap:6px;padding:11px 4px;border:1px solid var(--border);
+    border-radius:11px;background:rgba(255,255,255,.02);color:var(--text);font-size:11px;font-weight:600;cursor:pointer;
+    text-decoration:none;transition:.13s}
+  .sheet .net:hover{border-color:var(--brand-1);background:var(--card-2)}
+  .sheet .net .ic{font-size:19px;line-height:1}
+  .sheet .cap{width:100%;min-height:74px;resize:vertical;font-size:13px;line-height:1.5;margin-top:4px}
+  .sheet .row{display:flex;gap:8px;margin-top:10px}
+  .sheet .row button,.sheet .row a{flex:1;text-align:center;padding:11px;border-radius:var(--radius-sm);
+    border:1px solid var(--border-2);background:var(--card-2);color:var(--text);font-weight:700;font-size:13px;
+    cursor:pointer;font-family:inherit;text-decoration:none;transition:.13s}
+  .sheet .row button:hover,.sheet .row a:hover{border-color:var(--brand-1)}
+  .sheet label.lbl{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);
+    display:block;margin:16px 0 6px}
+  .sheet .lan{font-size:12px;color:var(--muted);line-height:1.5;margin-top:14px;padding-top:14px;
+    border-top:1px solid var(--border)}
+  .sheet .lan code{color:var(--brand-1);font-family:'JetBrains Mono',monospace;word-break:break-all}
+
   /* editor overlay */
   .editor{position:fixed;inset:0;z-index:50;background:rgba(6,6,10,.78);backdrop-filter:blur(10px);
     display:none;overflow-y:auto;padding:32px 18px 80px}
@@ -549,6 +585,7 @@
       <span class="savestate" id="edSaveState"></span>
       <button class="ghost" id="edSave">💾 Save</button>
       <button class="go nle-render" id="edRender">⟳ Re-render</button>
+      <button class="ghost" id="edShare">📤 Share</button>
       <button class="x" id="edClose" title="Close">✕</button>
     </div>
   </div>
@@ -613,6 +650,27 @@
     <div class="panel">
       <div class="proglist" id="pjList"><div class="muted">Loading…</div></div>
     </div>
+  </div>
+</div>
+
+<div class="sheet" id="shareSheet">
+  <div class="sheet-inner">
+    <div class="sheet-head">
+      <h2>📤 Share video</h2>
+      <button class="x" id="shClose" title="Close">✕</button>
+    </div>
+    <div class="muted" id="shTitle"></div>
+    <button class="native" id="shNative" style="display:none">📱 Share to an app…</button>
+    <label class="lbl">Post to</label>
+    <div class="grid" id="shGrid"></div>
+    <label class="lbl">Caption</label>
+    <textarea class="cap" id="shCaption"></textarea>
+    <div class="row">
+      <button id="shCopyCap">Copy caption</button>
+      <button id="shCopyLink">Copy link</button>
+      <a id="shDownload" download>Download MP4</a>
+    </div>
+    <div class="lan" id="shLan" style="display:none"></div>
   </div>
 </div>
 
@@ -809,9 +867,12 @@ function showResult(res){
   // Full editor (scenes, captions, audio, footage swap) for the deeper edits.
   const edit = res.projectId
     ? `<button class="editbtn" onclick="openEditor('${res.projectId}')">✎ Edit this video</button>` : '';
+  // Share opens the share sheet (native OS share sheet + per-platform composers).
+  const share = res.projectId
+    ? `<button class="sharebtn" onclick="openShare('${res.projectId}')">📤 Share</button>` : '';
   $('#resultBox').innerHTML=
     `<video id="resultVideo" controls src="/output/${res.file}"></video>${lang}${music}${capCtl}<br>
-     <a class="dl" id="resultDl" href="/output/${res.file}" download>⬇ Download MP4</a>${edit}`;
+     <a class="dl" id="resultDl" href="/output/${res.file}" download>⬇ Download MP4</a>${share}${edit}`;
   if(capCtl){
     const cur=state.capSize||'M';
     [...$('#capResize').children].forEach(b=>b.classList.toggle('on',b.dataset.v===cur));
@@ -826,6 +887,87 @@ function showResult(res){
        <div class="muted">query: ${s.usedQuery||s.query} · ${s.durationSec}s</div></div>`).join('');
   }
 }
+
+/* ============================ SHARE ============================ */
+const SHARE_ICON = { x:'𝕏', whatsapp:'💬', facebook:'f', telegram:'✈️', linkedin:'in', reddit:'👽', email:'✉️' };
+let shareKit = null;
+
+// True when the browser can put an actual file into the OS share sheet (Web
+// Share API level 2). That's the path that reaches *any* installed app.
+function canShareFiles(){
+  try{ return !!(navigator.canShare && navigator.canShare({ files:[new File([new Blob()],'v.mp4',{type:'video/mp4'})] })); }
+  catch{ return false; }
+}
+
+async function openShare(projectId){
+  const sheet=$('#shareSheet');
+  try{
+    const r=await fetch(`/api/project/${projectId}/share`);
+    const k=await r.json();
+    if(!r.ok) throw new Error(k.error||'could not build share kit');
+    shareKit=k;
+  }catch(e){ alert('Share unavailable: '+e.message); return; }
+
+  $('#shTitle').textContent=shareKit.title;
+  $('#shCaption').value=shareKit.captions.long;
+  $('#shDownload').href=shareKit.fileUrl;
+  $('#shDownload').setAttribute('download', shareKit.file);
+
+  // Per-platform composer buttons (open the network's own share dialog).
+  $('#shGrid').innerHTML=shareKit.platforms.map(p=>
+    `<a class="net" href="${p.href}" target="_blank" rel="noopener"><span class="ic">${SHARE_ICON[p.id]||'🔗'}</span>${p.label}</a>`).join('');
+
+  // Native share sheet: shown when the browser supports it at all.
+  const nativeBtn=$('#shNative');
+  nativeBtn.style.display = (navigator.share || canShareFiles()) ? 'flex' : 'none';
+
+  // LAN hint: lets a desktop user open the app on their phone (same Wi-Fi) and
+  // post natively from there — the most reliable "any platform" route.
+  const lan=$('#shLan');
+  if(shareKit.lanFileUrl){
+    lan.style.display='block';
+    lan.innerHTML=`On your phone (same Wi-Fi) open <code>${shareKit.lanFileUrl}</code> to share straight to any app.`;
+  } else { lan.style.display='none'; }
+
+  sheet.classList.add('open');
+}
+function closeShare(){ $('#shareSheet').classList.remove('open'); }
+
+async function nativeShare(){
+  if(!shareKit) return;
+  const caption=$('#shCaption').value;
+  // Try to attach the real MP4 first (reaches every installed app).
+  if(canShareFiles()){
+    try{
+      const res=await fetch(shareKit.fileUrl);
+      const blob=await res.blob();
+      const file=new File([blob], shareKit.file, { type:'video/mp4' });
+      if(navigator.canShare({ files:[file] })){
+        await navigator.share({ files:[file], title:shareKit.title, text:caption });
+        return;
+      }
+    }catch(e){ if(e.name==='AbortError') return; /* fall through to link share */ }
+  }
+  // Fallback: share the link + caption (no file).
+  if(navigator.share){
+    try{ await navigator.share({ title:shareKit.title, text:caption, url:shareKit.fileUrl }); }
+    catch(e){ if(e.name!=='AbortError') alert('Share failed: '+e.message); }
+  }
+}
+
+async function copyToClip(text, btn){
+  try{ await navigator.clipboard.writeText(text); }
+  catch{ const t=document.createElement('textarea'); t.value=text; document.body.appendChild(t); t.select();
+    document.execCommand('copy'); t.remove(); }
+  const old=btn.textContent; btn.textContent='✓ Copied'; setTimeout(()=>btn.textContent=old,1400);
+}
+
+$('#shClose').addEventListener('click', closeShare);
+$('#shareSheet').addEventListener('click', e=>{ if(e.target.id==='shareSheet') closeShare(); });
+$('#shNative').addEventListener('click', nativeShare);
+$('#shCopyCap').addEventListener('click', e=>copyToClip($('#shCaption').value, e.currentTarget));
+$('#shCopyLink').addEventListener('click', e=>copyToClip(shareKit?shareKit.fileUrl:'', e.currentTarget));
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && $('#shareSheet').classList.contains('open')) closeShare(); });
 
 /* ============================ EDITOR ============================ */
 const esc = (s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -858,6 +1000,7 @@ E('edZoomIn').addEventListener('click',()=>setZoom(pps*1.4,true));
 E('edZoomOut').addEventListener('click',()=>setZoom(pps/1.4,true));
 E('edSave').addEventListener('click',()=>doSave().then(ok=>ok&&setSaveState('Saved.','ok')));
 E('edRender').addEventListener('click',reRender);
+E('edShare').addEventListener('click',()=>{ if(proj) openShare(proj.id); });
 E('edTitle').addEventListener('input',e=>{ if(proj) proj.title=e.target.value; });
 E('edTlScroll').addEventListener('click',(e)=>{ // click empty timeline area to seek
   if(e.target.closest('.sblock,.cblock,.bhandle')) return;
