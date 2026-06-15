@@ -905,6 +905,27 @@
   </div>
 </div>
 
+<!-- Footage gallery: browse every searched clip (Pexels / Pixabay / YouTube) full-size -->
+<div class="stockmodal" id="stockModal">
+  <div class="smhead">
+    <h3>🎬 Replace footage</h3>
+    <span style="flex:1"></span>
+    <button class="x" id="smClose" title="Close">✕</button>
+  </div>
+  <div class="smbar">
+    <input type="text" id="smQ" placeholder="search footage…">
+    <button class="ghost" id="smGo" style="flex:0 0 auto">Search</button>
+    <div class="srcchips" id="smSources">
+      <button data-s="all" class="on">All</button>
+      <button data-s="pexels">Pexels</button>
+      <button data-s="pixabay">Pixabay</button>
+      <button data-s="youtube" id="smYt" style="display:none">YouTube</button>
+    </div>
+  </div>
+  <div class="stockmodal-grid" id="smGrid"></div>
+  <div class="smfoot muted" id="smFoot"></div>
+</div>
+
 <script>
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
@@ -1245,6 +1266,16 @@ $('#shNative').addEventListener('click', nativeShare);
 $('#shCopyCap').addEventListener('click', e=>copyToClip($('#shCaption').value, e.currentTarget));
 $('#shCopyLink').addEventListener('click', e=>copyToClip(shareKit?shareKit.fileUrl:'', e.currentTarget));
 document.addEventListener('keydown', e=>{ if(e.key==='Escape' && $('#shareSheet').classList.contains('open')) closeShare(); });
+
+// footage gallery modal — static controls (the grid is rebuilt per search)
+$('#smClose').addEventListener('click', closeStockModal);
+$('#stockModal').addEventListener('click', e=>{ if(e.target.id==='stockModal') closeStockModal(); });
+$('#smGo').addEventListener('click', ()=>runModalSearch($('#smQ').value));
+$('#smQ').addEventListener('keydown', e=>{ if(e.key==='Enter'){ e.preventDefault(); runModalSearch($('#smQ').value); } });
+$('#smSources').addEventListener('click', e=>{ const b=e.target.closest('button'); if(!b)return;
+  [...e.currentTarget.children].forEach(x=>x.classList.toggle('on', x===b));
+  if(smQuery) loadModalSource(b.dataset.s); else smSource=b.dataset.s; });
+document.addEventListener('keydown', e=>{ if(e.key==='Escape' && $('#stockModal').classList.contains('show')) closeStockModal(); });
 
 /* ============================ EDITOR ============================ */
 const esc = (s)=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -1706,6 +1737,7 @@ function sceneInspector(s){
         <input type="text" id="ispStockQ" placeholder="search stock footage…" value="${esc(s.query||'')}">
         <button class="ghost" id="ispStockGo" style="flex:0 0 auto">Search</button>
       </div>
+      <button class="ghost" id="ispStockBrowse" style="width:100%;margin-top:8px;font-size:12px">⛶ Browse all clips${ytEnabled?' (incl. YouTube)':''}</button>
       <div class="stockgrid" id="ispStock"></div>
       <div class="muted" id="ispSwapStatus" style="margin-top:6px"></div>
     </div>`;
@@ -1783,6 +1815,7 @@ function wireInspector(){
   const up=E('ispUpload'); if(up) up.addEventListener('change',()=>replaceFootageFile(up));
   const sgo=E('ispStockGo'); if(sgo) sgo.addEventListener('click',()=>stockSearch(E('ispStockQ').value));
   const sq=E('ispStockQ'); if(sq) sq.addEventListener('keydown',e=>{ if(e.key==='Enter'){e.preventDefault();stockSearch(sq.value);} });
+  const sbr=E('ispStockBrowse'); if(sbr) sbr.addEventListener('click',()=>openStockModal(E('ispStockQ').value));
 
   // cue controls
   const ct=E('ispCueText'); if(ct) ct.addEventListener('input',()=>{ proj.captions.cues[sel.id].text=ct.value; buildCues(); });
@@ -1835,31 +1868,93 @@ async function replaceFootageFile(input){
     else st.textContent='Upload failed';
   }catch(e){ st.textContent='Upload failed'; }
 }
+// One clip cell. Stock (Pexels/Pixabay) previews inline as a muted <video> on
+// hover; YouTube has no direct file URL, so it shows its thumbnail with a ▶ badge.
+function stockCellHTML(c,i){
+  const tag=`<span class="tag">${c.provider} · ${Math.round(c.duration||0)}s</span>`;
+  if(c.provider==='youtube'){
+    return `<div class="stockcell" data-i="${i}"><img src="${c.thumb||''}" loading="lazy" alt="">`
+      +`<span class="play">▶</span>${tag}`
+      +(c.title?`<span class="ttl">${esc(c.title)}</span>`:'')+`</div>`;
+  }
+  return `<div class="stockcell" data-i="${i}"><video src="${c.url}#t=0.1" muted preload="metadata" loop></video>${tag}</div>`;
+}
+// Hover-preview + click-to-apply wiring shared by inline grid and gallery modal.
+function wireStockCells(grid,cands,statusEl){
+  grid.querySelectorAll('.stockcell').forEach((cell)=>{
+    const i=+cell.dataset.i; const v=cell.querySelector('video');
+    if(v){ cell.addEventListener('mouseenter',()=>{v.play().catch(()=>{});}); cell.addEventListener('mouseleave',()=>{v.pause();}); }
+    cell.addEventListener('click',()=>applyStock(cands[i].url,cell,statusEl));
+  });
+}
 async function stockSearch(q){
   q=(q||'').trim(); if(!q)return; const grid=E('ispStock'); grid.innerHTML='<div class="muted">Searching…</div>';
   const my=++stockReq;
   try{
-    const d=await (await fetch(`/api/stock/search?q=${encodeURIComponent(q)}&aspect=${encodeURIComponent(proj.aspect)}`)).json();
+    const d=await (await fetch(`/api/stock/search?q=${encodeURIComponent(q)}&aspect=${encodeURIComponent(proj.aspect)}&limit=12`)).json();
     if(my!==stockReq)return;
     if(!d.candidates||!d.candidates.length){ grid.innerHTML='<div class="muted">No clips found.</div>'; return; }
-    grid.innerHTML=d.candidates.map((c,i)=>`<div class="stockcell" data-i="${i}"><video src="${c.url}#t=0.1" muted preload="metadata" loop></video><span class="tag">${c.provider} · ${Math.round(c.duration||0)}s</span></div>`).join('');
-    grid.querySelectorAll('.stockcell').forEach((cell,i)=>{
-      const v=cell.querySelector('video');
-      cell.addEventListener('mouseenter',()=>{v.play().catch(()=>{});}); cell.addEventListener('mouseleave',()=>{v.pause();});
-      cell.addEventListener('click',()=>applyStock(d.candidates[i].url,cell));
-    });
+    grid.innerHTML=d.candidates.map(stockCellHTML).join('');
+    wireStockCells(grid,d.candidates,E('ispSwapStatus'));
   }catch(e){ if(my===stockReq) grid.innerHTML='<div class="muted">Search failed.</div>'; }
 }
-async function applyStock(url,cell){
+async function applyStock(url,cell,statusEl){
   const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null; if(!s)return;
-  cell.classList.add('busy'); const st=E('ispSwapStatus'); st.textContent='Downloading clip…';
+  cell.classList.add('busy'); const st=statusEl||E('ispSwapStatus'); st.textContent='Downloading clip…';
   try{
     const r=await fetch(`/api/project/${proj.id}/scene/${s.index}/source`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
-    if(r.ok&&d.scene){ applyNewSource(null,d.scene.sourceUrl); st.textContent='✓ Footage replaced (re-encodes on render)'; }
+    if(r.ok&&d.scene){ applyNewSource(null,d.scene.sourceUrl); st.textContent='✓ Footage replaced (re-encodes on render)'; closeStockModal(); }
     else st.textContent=d.error||'Swap failed';
   }catch(e){ st.textContent='Swap failed'; }
   cell.classList.remove('busy');
+}
+
+/* ---------- footage gallery modal ----------
+   Each source tab fetches that source directly (cached per query) so the YouTube
+   tab shows a full page of YouTube instead of the handful that survive the
+   stock-led "All" ranking. */
+let smReq=0, smSource='all', smQuery='', smCache={};
+// source tab → the `sources` query param it fetches
+function smSourcesParam(tab){
+  if(tab==='all') return ytEnabled?'pexels,pixabay,youtube':'pexels,pixabay';
+  return tab;
+}
+function openStockModal(q){
+  if(sel.type!=='scene') return;
+  E('stockModal').classList.add('show');
+  if(ytEnabled) E('smYt').style.display='';
+  smSource='all'; smCache={};
+  [...E('smSources').children].forEach(x=>x.classList.toggle('on', x.dataset.s==='all'));
+  const inp=E('smQ'); inp.value=(q||'').trim();
+  E('smFoot').textContent=''; E('smGrid').innerHTML='';
+  inp.focus(); inp.select();
+  if(inp.value) runModalSearch(inp.value);
+}
+function closeStockModal(){ const m=E('stockModal'); if(m) m.classList.remove('show'); E('smGrid').innerHTML=''; smCache={}; }
+// New query → drop the per-source cache and reload the active tab.
+function runModalSearch(q){ q=(q||'').trim(); if(!q)return; smQuery=q; smCache={}; loadModalSource(smSource); }
+async function loadModalSource(tab){
+  smSource=tab;
+  const grid=E('smGrid'), foot=E('smFoot');
+  if(smCache[tab]){ renderModalGrid(smCache[tab]); return; }
+  const label=tab==='all'?(ytEnabled?'Pexels, Pixabay and YouTube':'Pexels and Pixabay'):tab;
+  grid.innerHTML=''; foot.textContent='Searching '+label+'…';
+  const my=++smReq;
+  try{
+    const url=`/api/stock/search?q=${encodeURIComponent(smQuery)}&aspect=${encodeURIComponent(proj.aspect)}&sources=${smSourcesParam(tab)}&limit=40`;
+    const d=await (await fetch(url)).json();
+    if(my!==smReq||smSource!==tab)return;
+    smCache[tab]=d.candidates||[];
+    renderModalGrid(smCache[tab]);
+  }catch(e){ if(my===smReq){ foot.textContent='Search failed.'; } }
+}
+function renderModalGrid(list){
+  const grid=E('smGrid'), foot=E('smFoot');
+  if(!list||!list.length){ grid.innerHTML=''; foot.textContent='No clips found.'; return; }
+  grid.innerHTML=list.map(stockCellHTML).join('');
+  wireStockCells(grid,list,foot);
+  foot.textContent=`${list.length} clip${list.length===1?'':'s'} — hover to preview, click to use`;
 }
 // Point the selected scene at a new source. `path` updates proj for save; `url` for live preview.
 // For stock swaps the server already saved source.path, so we reload the doc on next save anyway;

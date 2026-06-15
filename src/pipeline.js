@@ -15,7 +15,8 @@ import { buildProject, saveProject, planRender, loadProject } from './project.js
 import { renderProject } from './render.js';
 import { detectTempo, beatGrid, snapToBeats } from './beats.js';
 import { probeSize, nearestAspect, extractAudio, makeShort } from './ffmpeg.js';
-import { transcribe, transcriptText, highlightWindows, pickTopWindows, windowCues } from './transcribe.js';
+import { probeDuration } from './voice.js';
+import { transcribe, transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from './transcribe.js';
 import { translateForDub } from './dub.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
@@ -237,6 +238,7 @@ export function runDub(opts) {
       const targetLanguage = getVoice(voice)?.lang || 'English';
       const { w, h } = await probeSize(videoPath);
       const aspect = RESOLUTIONS[opts.aspect] ? opts.aspect : nearestAspect(w, h);
+      const videoDur = await probeDuration(videoPath);
 
       // 1. Transcribe the original audio.
       emit(job, 'transcribe', 'Listening to the original audio…', 8);
@@ -266,18 +268,29 @@ export function runDub(opts) {
         captionCues = cues && cues.length ? cues : null;
       }
 
-      // 5. One-scene project: the original video fitted to the narration length.
+      // 5. Reconcile lengths. A translation is rarely the same length as the
+      // original, so the timeline runs for max(video, voiceover): the footage
+      // plays once and holds its last frame (freeze, never loops) if the voice is
+      // longer; the voice is padded with trailing silence if the footage is
+      // longer. No looped video, no clipped voice, no frozen-vs-cut mismatch.
+      const voDur = m.duration;
+      const target = Math.max(videoDur || voDur, voDur);
+      let voicePath = m.audioPath;
+      if (target - voDur > 0.05) {
+        voicePath = await padAudio({ input: m.audioPath, outBase: `${id}_vo`, trail: target - voDur });
+      }
+
       emit(job, 'render', 'Laying the new voice over the video…', 60);
       const project = buildProject({
         id, opts: { topic: `Dub → ${targetLanguage}`, fades: false, motion: false },
         plan: { title: `${(tr.language || 'video').toUpperCase()} → ${targetLanguage} dub` },
         aspect, fps: 30, language: targetLanguage,
-        voiceTrack: { path: m.audioPath, duration: m.duration },
+        voiceTrack: { path: voicePath, duration: target },
         captions: { enabled: Boolean(captionCues), cues: captionCues || [], style: opts.captionStyle || {} },
         music: null,
         scenes: [{
           index: 1, narration: translated, query: '',
-          sourcePath: videoPath, clipPath: null, duration: m.duration, motion: false,
+          sourcePath: videoPath, clipPath: null, duration: target, motion: false, freeze: true,
         }],
       });
       project.dub = { sourceLanguage: tr.language, targetLanguage, sourceText };
@@ -339,7 +352,10 @@ export function runShorts(opts) {
         const win = windows[i];
         let captionsPath = null;
         if (subtitles) {
-          const cues = windowCues(tr.segments, win.start, win.end);
+          // Prefer exact per-word timing; fall back to segment-level cues when a
+          // transcript carries no word timestamps.
+          const wordCues = windowWordCues(tr.segments, win.start, win.end);
+          const cues = wordCues.length ? wordCues : windowCues(tr.segments, win.start, win.end);
           if (cues.length) {
             captionsPath = buildKaraokeAss({
               cues, aspect: outAspect, assPath: path.join(config.dirs.audio, `${id}_short${i}.ass`),
