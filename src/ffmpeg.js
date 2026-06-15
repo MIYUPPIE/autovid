@@ -138,6 +138,56 @@ export async function makeTextCard({
   return out;
 }
 
+// Supported scene transitions (#8) → the ffmpeg xfade transition name. 'cut' is
+// the plain hard-cut concat (no xfade, the fast stream-copy path).
+export const TRANSITIONS = {
+  cut: null, fade: 'fade', slideleft: 'slideleft', slideright: 'slideright',
+  wipeleft: 'wipeleft', wiperight: 'wiperight', circleopen: 'circleopen', dissolve: 'dissolve',
+};
+
+/**
+ * Build the xfade filter_complex graph that crossfades a sequence of clips whose
+ * (already extended) durations are `clipDurs`. Pure so the offset math is unit-
+ * tested. Each xfade overlaps its two inputs by `dur`, so the cut lands at the end
+ * of the previous clip's intended (un-extended) time. Returns:
+ *   { filter, label, totalDur } — label is the final video pad to map.
+ * For a single clip there is no transition: filter is '' and label is '[0:v]'.
+ */
+export function buildXfadeGraph(clipDurs, { transition = 'fade', dur = 0.4 } = {}) {
+  const n = clipDurs.length;
+  if (n <= 1) return { filter: '', label: '[0:v]', totalDur: clipDurs[0] || 0 };
+  const parts = [];
+  let prev = '[0:v]';
+  let offset = 0;
+  for (let i = 1; i < n; i++) {
+    // offset_i = offset_{i-1} + clipDurs[i-1] - dur  (offset_1 = clipDurs[0] - dur)
+    offset = i === 1 ? clipDurs[0] - dur : offset + clipDurs[i - 1] - dur;
+    const out = i === n - 1 ? '[vx]' : `[vx${i}]`;
+    parts.push(`${prev}[${i}:v]xfade=transition=${transition}:duration=${dur}:offset=${Math.max(0, offset).toFixed(3)}${out}`);
+    prev = out;
+  }
+  const totalDur = clipDurs.reduce((a, b) => a + b, 0) - dur * (n - 1);
+  return { filter: parts.join(';'), label: '[vx]', totalDur };
+}
+
+/**
+ * Concatenate scene clips with a crossfade transition between each (#8). Re-
+ * encodes (xfade can't stream-copy). `clipDurs` are the clips' real durations
+ * (each normalized `dur` seconds longer than its scene so the overlap nets out).
+ * Falls back to a hard-cut concat for a single clip. Returns the silent file.
+ */
+export async function concatWithTransitions({ sceneFiles, clipDurs, outBase, transition = 'fade', dur = 0.4 }) {
+  const name = TRANSITIONS[transition] || 'fade';
+  if (sceneFiles.length <= 1) return concatSilent({ sceneFiles, outBase });
+  const graph = buildXfadeGraph(clipDurs, { transition: name, dur });
+  const out = path.join(config.dirs.work, `${outBase}_silent.mp4`);
+  const inputs = sceneFiles.flatMap((f) => ['-i', f]);
+  const fc = `${graph.filter};${graph.label}format=yuv420p[vout]`;
+  await ffmpeg([...inputs, '-filter_complex', fc,
+    '-map', '[vout]', ...(await videoCodecArgs()), '-pix_fmt', 'yuv420p', '-an', out], 'concatWithTransitions');
+  return out;
+}
+
 /**
  * Concatenate silent, identically-encoded scene clips. Stream-copy when possible
  * (no re-encode → fast); falls back to re-encode if copy fails. Returns silent file.

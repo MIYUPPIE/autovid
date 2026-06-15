@@ -16,7 +16,7 @@
 import path from 'path';
 import fs from 'fs';
 import { config } from './config.js';
-import { normalizeClip, concatSilent, finalizeVideo, makeTextCard } from './ffmpeg.js';
+import { normalizeClip, concatSilent, concatWithTransitions, finalizeVideo, makeTextCard } from './ffmpeg.js';
 import { buildKaraokeAss } from './captions.js';
 import { planRender, saveProject } from './project.js';
 
@@ -30,6 +30,10 @@ export async function renderProject(project, { onProgress } = {}) {
   const emit = (stage, message) => onProgress && onProgress(stage, message);
   const prev = project.render || {};
   const plan = planRender(project, prev);
+  // Scene crossfade (#8): with a transition, each clip is normalized this much
+  // longer so the xfade overlap nets back to the intended cut times.
+  const transition = project.effects?.transition || 'cut';
+  const xfadeDur = transition !== 'cut' ? config.transitionSeconds : 0;
 
   // 1. Per-scene normalize (only the dirty ones).
   for (const scene of project.scenes) {
@@ -44,7 +48,7 @@ export async function renderProject(project, { onProgress } = {}) {
       scene.clip = { path: await makeTextCard({
         narration: scene.card.narration, query: scene.card.query,
         outBase: `${project.id}_s${scene.index}`, aspect: project.aspect,
-        targetDur: scene.duration, fps: project.fps, index: scene.index,
+        targetDur: scene.duration + xfadeDur, fps: project.fps, index: scene.index,
         brand: project.brand || null,
       }) };
       continue;
@@ -57,7 +61,7 @@ export async function renderProject(project, { onProgress } = {}) {
       input,
       outBase: `${project.id}_s${scene.index}`,
       aspect: project.aspect,
-      targetDur: scene.duration,
+      targetDur: scene.duration + xfadeDur,
       fps: project.fps,
       motion: scene.motion,
       index: scene.index,
@@ -69,9 +73,14 @@ export async function renderProject(project, { onProgress } = {}) {
   // 2. Concat the silent scene clips, in timeline order.
   let silentPath = prev.silentPath;
   if (plan.concat || !silentPath || !fs.existsSync(silentPath)) {
-    emit('concat', 'Stitching scenes');
+    emit('concat', xfadeDur ? `Stitching scenes with ${transition}` : 'Stitching scenes');
     const sceneFiles = project.scenes.map((s) => s.clip.path);
-    silentPath = await concatSilent({ sceneFiles, outBase: project.id });
+    silentPath = xfadeDur
+      ? await concatWithTransitions({
+          sceneFiles, clipDurs: project.scenes.map((s) => s.duration + xfadeDur),
+          outBase: project.id, transition, dur: xfadeDur,
+        })
+      : await concatSilent({ sceneFiles, outBase: project.id });
   } else {
     emit('concat', 'Stitch reused from cache');
   }

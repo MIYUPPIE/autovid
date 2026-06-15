@@ -9,9 +9,9 @@ import { ensureDirs, probeDuration } from './voice.js';
 import { runPipeline, getJob, startProjectRender } from './pipeline.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects, hashOf } from './project.js';
 import { activeLlm } from './llm.js';
-import { CAPTION_SIZES } from './captions.js';
+import { CAPTION_SIZES, CAPTION_ANIMS } from './captions.js';
 import { MEDIA_DIRS, previewBundle, resolveAssetPath } from './edit.js';
-import { extractThumbs, extractWaveform } from './ffmpeg.js';
+import { extractThumbs, extractWaveform, TRANSITIONS } from './ffmpeg.js';
 import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
 import { buildShareKit, lanBaseUrl } from './share.js';
 
@@ -92,17 +92,19 @@ app.post('/api/render', (req, res) => {
   const captionStyle = {};
   if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
   if (Number(b.captionScale) > 0) captionStyle.scale = Number(b.captionScale);
+  if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
   const fades = b.fades !== false;
   const motion = b.motion !== false; // Ken Burns on by default
   const autoMusic = Boolean(b.autoMusic);
   const codeSwitch = Boolean(b.codeSwitch); // mix in natural English the way bilingual speakers do
   const beatSync = b.beatSync !== false;    // snap cuts to the music beat (on by default)
   const bRoll = b.bRoll !== false;          // split long scenes into short shots (on by default)
+  const transition = TRANSITIONS[b.transition] !== undefined ? b.transition : 'cut'; // scene crossfade (#8)
   const bgMusicPath = b.bgMusicPath && fs.existsSync(b.bgMusicPath) ? b.bgMusicPath : null;
 
   const id = runPipeline({
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll,
+    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll, transition,
   });
   res.json({ jobId: id });
 });

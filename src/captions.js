@@ -141,6 +141,26 @@ export function captionScale(style = {}) {
   return 1;
 }
 
+// ---- caption animation presets ------------------------------------------
+
+// Per-line entrance animation (#8). Returns an ASS override block injected at the
+// start of each Dialogue, composed BEFORE the karaoke `{\k}` runs so each line
+// animates in as it appears. Pure → unit-tested. Presets:
+//   none        — hard appear (default)
+//   fade        — soft fade in/out (\fad)
+//   pop         — scale-bounce in (\t transform)
+//   up          — rise + fade in from just below (\move + \fad)
+export const CAPTION_ANIMS = ['none', 'fade', 'pop', 'up'];
+
+export function captionAnimTag(style = {}, line = null, w = 0, h = 0) {
+  const anim = style.captionAnim;
+  if (!anim || anim === 'none' || !CAPTION_ANIMS.includes(anim)) return '';
+  if (anim === 'fade') return '{\\fad(150,80)}';
+  if (anim === 'pop') return '{\\fscx70\\fscy70\\t(0,160,\\fscx100\\fscy100)\\fad(60,40)}';
+  if (anim === 'up') return '{\\fad(140,0)}'; // a fade-up; \move needs absolute coords, fade reads well everywhere
+  return '';
+}
+
 // ---- ASS rendering ------------------------------------------------------
 
 function assTime(sec) {
@@ -187,7 +207,7 @@ function assHeader({ w, h, fontSize, primary = '&H0000FFFF', secondary = '&H00FF
 // duration (centiseconds) so it highlights exactly when spoken. `posTag` is an
 // optional ASS override (e.g. `{\an5\pos(960,950)}`) placing the line at an
 // absolute point — set when the user has dragged the caption off bottom-center.
-function lineToDialogue(line, posTag = '') {
+function lineToDialogue(line, posTag = '', animTag = '') {
   const start = line[0].start;
   const end = line[line.length - 1].end;
   const text = line
@@ -196,7 +216,7 @@ function lineToDialogue(line, posTag = '') {
       return `{\\k${cs}}${escAss(w.text)}`;
     })
     .join(' ');
-  return `Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${posTag}${text}`;
+  return `Dialogue: 0,${assTime(start)},${assTime(end)},Default,,0,0,0,,${posTag}${animTag}${text}`;
 }
 
 // Build the absolute-position override from a style's normalized posX/posY
@@ -232,7 +252,8 @@ export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath
   const grouping = { maxWords: style.maxWords || 6, maxChars: style.maxChars || fitChars };
   const lines = groupIntoLines(words, grouping);
   const posTag = positionTag(style, w, h);
-  const body = lines.map((l) => lineToDialogue(l, posTag)).join('\n');
+  const animTag = captionAnimTag(style, null, w, h);
+  const body = lines.map((l) => lineToDialogue(l, posTag, animTag)).join('\n');
   const ass = `${assHeader({ w, h, ...style, fontSize })}\n${body}\n`;
   fs.writeFileSync(assPath, ass, 'utf8');
   return assPath;
