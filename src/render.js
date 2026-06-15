@@ -111,6 +111,7 @@ export async function renderProject(project, { onProgress } = {}) {
     musicVolume: typeof music?.volume === 'number' ? music.volume : 0.12,
     aspect: project.aspect,
     fades: project.effects?.fades !== false,
+    logo: project.brand?.logoPath || null,
     outName,
   });
 

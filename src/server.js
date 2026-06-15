@@ -15,6 +15,7 @@ import { MEDIA_DIRS, previewBundle, resolveAssetPath } from './edit.js';
 import { extractThumbs, extractWaveform, TRANSITIONS } from './ffmpeg.js';
 import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
 import { buildShareKit, lanBaseUrl } from './share.js';
+import { loadBrand, saveBrand } from './brand.js';
 
 ensureDirs();
 
@@ -55,6 +56,25 @@ app.post('/api/clip', express.raw({ type: '*/*', limit: '200mb' }), (req, res) =
 // --- Config / capabilities ---
 app.get('/api/voices', (req, res) => {
   res.json({ voices: VOICES, resolutions: RESOLUTIONS });
+});
+
+// --- Brand kit (#10): one persisted identity applied to every render ---
+app.get('/api/brand', (req, res) => {
+  res.json(loadBrand());
+});
+
+app.put('/api/brand', (req, res) => {
+  res.json(saveBrand(req.body || {}));
+});
+
+// Logo image upload for the brand kit. Returns the stored path to put in the brand.
+app.post('/api/logo', express.raw({ type: '*/*', limit: '8mb' }), (req, res) => {
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file' });
+  const ext = (req.query.ext || 'png').toString().replace(/[^a-z0-9]/gi, '') || 'png';
+  const dest = path.join(config.dirs.work, `logo_${Date.now()}.${ext}`);
+  fs.mkdirSync(config.dirs.work, { recursive: true });
+  fs.writeFileSync(dest, req.body);
+  res.json({ path: dest });
 });
 
 app.get('/api/health', async (req, res) => {

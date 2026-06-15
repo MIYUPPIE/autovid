@@ -16,8 +16,9 @@ import { activeLlm, llmChat } from '../src/llm.js';
 import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
 import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
-  captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS,
+  captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS, hexToAss,
 } from '../src/captions.js';
+import { normalizeBrand, DEFAULT_BRAND } from '../src/brand.js';
 import { buildXfadeGraph, TRANSITIONS, nearestAspect } from '../src/ffmpeg.js';
 import { transcriptText, highlightWindows, pickTopWindows, windowCues } from '../src/transcribe.js';
 import { buildDubPrompt, cleanDubText } from '../src/dub.js';
@@ -833,6 +834,33 @@ test('cards: palette cycles by index, honors a brand override, width by aspect',
   assert.ok(cardWrapWidth('9:16') < cardWrapWidth('16:9'), 'portrait wraps sooner');
 });
 
+// ---------- brand kit (#10) ----------
+test('brand: normalizeBrand validates colours, clamps durations, keeps shape', () => {
+  const b = normalizeBrand({
+    name: 'X'.repeat(200), primaryColor: 'not-a-color', accentColor: '#abc',
+    cardColors: ['#112233', 'bad'], captionPrimary: '#ff0000',
+    intro: { enabled: true, text: 'Hi', seconds: 99 }, outro: { enabled: 'yes', seconds: -3 },
+  });
+  assert.equal(b.name.length, 60, 'name capped');
+  assert.equal(b.primaryColor, DEFAULT_BRAND.primaryColor, 'bad hex → default');
+  assert.equal(b.accentColor, '#abc', '#RGB shorthand accepted');
+  assert.deepEqual(b.cardColors, ['#112233', DEFAULT_BRAND.cardColors[1]], 'bad second colour → default');
+  assert.equal(b.captionPrimary, '#ff0000');
+  assert.equal(b.intro.seconds, 6, 'intro seconds clamped to max');
+  assert.equal(b.outro.seconds, 0.8, 'outro seconds clamped to min');
+  assert.equal(b.outro.enabled, true, 'truthy enabled coerced');
+  // Empty input → safe defaults.
+  assert.deepEqual(normalizeBrand({}).cardColors, DEFAULT_BRAND.cardColors);
+});
+
+test('captions: hexToAss converts #RRGGBB to ASS BGR, rejects junk', () => {
+  assert.equal(hexToAss('#FF0000'), '&H000000FF'); // red → BGR
+  assert.equal(hexToAss('#00FF00'), '&H0000FF00');
+  assert.equal(hexToAss('#abc'), '&H00CCBBAA');     // shorthand expands
+  assert.equal(hexToAss('nope'), null);
+  assert.equal(hexToAss(123), null);
+});
+
 // ---------- dub + transcription helpers (#2 / #9) ----------
 test('transcribe: transcriptText joins segments and normalizes whitespace', () => {
   const segs = [{ start: 0, end: 2, text: ' Hello  there ' }, { start: 2, end: 4, text: 'world.' }, { start: 4, end: 5, text: '' }];
@@ -1054,6 +1082,24 @@ test('http: POST /api/dub validates videoPath and voice before doing any work', 
     });
     fs.unlinkSync(tmp);
     assert.equal(badVoice.status, 400);
+  });
+});
+
+test('http: GET/PUT /api/brand round-trips a normalized brand kit', async () => {
+  await withServer(async (base) => {
+    const put = await fetch(`${base}/api/brand`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Studio', primaryColor: '#123456', intro: { enabled: true, text: 'Hi', seconds: 3 } }),
+    });
+    assert.equal(put.status, 200);
+    const saved = await put.json();
+    assert.equal(saved.name, 'Studio');
+    assert.equal(saved.primaryColor, '#123456');
+    assert.equal(saved.intro.seconds, 3);
+    // Read it back.
+    const got = await (await fetch(`${base}/api/brand`)).json();
+    assert.equal(got.name, 'Studio');
+    assert.equal(got.intro.enabled, true);
   });
 });
 

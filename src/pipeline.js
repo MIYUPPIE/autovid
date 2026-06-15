@@ -4,8 +4,10 @@ import { config, RESOLUTIONS } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
 import { findClipCandidates, downloadClip, orientationFor, clipKey, localizeQuery } from './stock.js';
 import { synthesizeVoice, synthesizeMany } from './voice.js';
-import { buildKaraokeAss, parseSrt } from './captions.js';
+import { buildKaraokeAss, parseSrt, hexToAss } from './captions.js';
 import { getVoice } from './voices.js';
+import { loadBrand } from './brand.js';
+import { padAudio } from './ffmpeg.js';
 import fs from 'fs';
 import { autoMusic } from './music.js';
 import { normalizeClip, concatSilent, concatWithTransitions, finalizeVideo, assembleVoiceTrack, makeTextCard } from './ffmpeg.js';
@@ -389,6 +391,13 @@ export function runPipeline(opts) {
       // Crossfade headroom: with transitions on, each scene clip is rendered this
       // much longer so the xfade overlap nets back to the intended cut times.
       const xfadeDur = transition && transition !== 'cut' ? config.transitionSeconds : 0;
+
+      // Brand kit (#10): one persisted identity applied to every video. Caption
+      // colours feed the karaoke style; card colours/intro/outro/logo are applied
+      // below. Brand intro/outro bookends are single-narration only.
+      const brand = loadBrand();
+      if (brand.captionPrimary && captionStyle.primary == null) captionStyle.primary = hexToAss(brand.captionPrimary);
+      if (brand.captionSecondary && captionStyle.secondary == null) captionStyle.secondary = hexToAss(brand.captionSecondary);
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
       const hasScript = Boolean(script && script.trim());
@@ -548,7 +557,7 @@ export function runPipeline(opts) {
           const card = { narration: scene.narration, query: scene.query };
           const norm = await makeTextCard({
             narration: card.narration, query: card.query, outBase: base,
-            aspect, targetDur: durations[i] + xfadeDur, index: i,
+            aspect, targetDur: durations[i] + xfadeDur, index: i, brand,
           });
           scene.usedQuery = scene.query;
           scene.provider = 'card';
@@ -569,19 +578,57 @@ export function runPipeline(opts) {
         return { norm, source: acquired.path };
       });
 
+      // 4b. Brand intro/outro bookends (#10): branded cards before/after the
+      // content, with the voice timeline padded by matching silence so everything
+      // still renders in one pass. Single-narration path only.
+      const sf = sceneFiles.slice();      // [{ norm, source, card }]
+      const vis = visualScenes.slice();
+      const durs = durations.slice();
+      let voiceAudio = master.audioPath;
+      let voiceDur = masterDur;
+      let cues = captionCues;
+      const canBookend = !bilingual;
+      const introSec = canBookend && brand.intro.enabled ? brand.intro.seconds : 0;
+      const outroSec = canBookend && brand.outro.enabled ? brand.outro.seconds : 0;
+      if (introSec || outroSec) {
+        const maxIdx = Math.max(0, ...vis.map((s) => Number(s.index) || 0));
+        if (introSec) {
+          const txt = brand.intro.text || brand.name || plan.title || '';
+          const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_intro`, aspect, targetDur: introSec + xfadeDur, index: 0, brand });
+          sf.unshift({ norm, source: null, card: { narration: txt, query: '' } });
+          vis.unshift({ index: maxIdx + 1, narration: txt, query: '' });
+          durs.unshift(introSec);
+        }
+        if (outroSec) {
+          const txt = brand.outro.text || brand.name || '';
+          const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_outro`, aspect, targetDur: outroSec + xfadeDur, index: 1, brand });
+          sf.push({ norm, source: null, card: { narration: txt, query: '' } });
+          vis.push({ index: maxIdx + 2, narration: txt, query: '' });
+          durs.push(outroSec);
+        }
+        // Pad the voice with leading/trailing silence and shift caption cues so
+        // they still line up with the (now later-starting) narration.
+        voiceAudio = await padAudio({ input: master.audioPath, outBase: `${id}_vo`, lead: introSec, trail: outroSec });
+        voiceDur = masterDur + introSec + outroSec;
+        if (cues && introSec) cues = cues.map((c) => ({ ...c, start: c.start + introSec, end: c.end + introSec }));
+        if (subtitles && cues && cues.length) {
+          captionsPath = buildKaraokeAss({ cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`), style: captionStyle });
+        }
+      }
+
       // 5. Stitch the silent scene clips: a hard-cut stream-copy (fast), or an
       // xfade crossfade when a transition is chosen (#8).
       emit(job, 'render', xfadeDur ? `Stitching scenes with ${transition}…` : 'Stitching scenes…', 80);
-      const normFiles = sceneFiles.map((r) => r.norm);
+      const normFiles = sf.map((r) => r.norm);
       const silent = xfadeDur
-        ? await concatWithTransitions({ sceneFiles: normFiles, clipDurs: durations.map((d) => d + xfadeDur), outBase: id, transition, dur: xfadeDur })
+        ? await concatWithTransitions({ sceneFiles: normFiles, clipDurs: durs.map((d) => d + xfadeDur), outBase: id, transition, dur: xfadeDur })
         : await concatSilent({ sceneFiles: normFiles, outBase: id });
 
-      // 7. Single final pass: narration + ducked music + subtitles + fades
+      // 7. Single final pass: narration + ducked music + subtitles + fades + logo
       emit(job, 'render', 'Mixing audio and rendering final video…', 90);
       const finalPath = await finalizeVideo({
-        silentVideo: silent, voiceAudio: master.audioPath, captions: captionsPath,
-        bgMusic, aspect, fades, outName: `${id}_final.mp4`,
+        silentVideo: silent, voiceAudio, captions: captionsPath,
+        bgMusic, aspect, fades, outName: `${id}_final.mp4`, logo: brand.logoPath,
       });
 
       // 8. Persist the editable project document (the timeline behind this MP4).
@@ -589,15 +636,16 @@ export function runPipeline(opts) {
       const project = buildProject({
         id, opts, plan, aspect, fps: 30,
         language: bilingual ? `${language} + ${language2}` : language, bilingual,
-        voiceTrack: { path: master.audioPath, duration: masterDur },
-        captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [], style: captionStyle },
+        brand,
+        voiceTrack: { path: voiceAudio, duration: voiceDur },
+        captions: { enabled: Boolean(subtitles && cues), cues: cues || [], style: captionStyle },
         music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta, beat } : null,
-        scenes: visualScenes.map((sc, i) => ({
+        scenes: vis.map((sc, i) => ({
           index: sc.index, narration: sc.narration, query: sc.query,
           usedQuery: sc.usedQuery, provider: sc.provider,
-          sourcePath: sceneFiles[i].source, clipPath: sceneFiles[i].norm,
-          card: sceneFiles[i].card || null,
-          duration: durations[i], motion,
+          sourcePath: sf[i].source, clipPath: sf[i].norm,
+          card: sf[i].card || null,
+          duration: durs[i], motion,
         })),
       });
       // Seed the render cache so the first edit only redoes what actually changed,
