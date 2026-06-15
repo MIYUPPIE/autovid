@@ -11,7 +11,8 @@
     "test": "node --test test/gate.test.js test/project.test.js",
     "eval": "node test/eval.js",
     "eval:yarn": "node test/yarn.smoke.js",
-    "eval:render": "node test/render.smoke.js"
+    "eval:render": "node test/render.smoke.js",
+    "eval:edit": "node test/edit.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",

@@ -20,6 +20,7 @@ import {
 } from '../src/captions.js';
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
+import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { app } from '../src/server.js';
 
 // Keep project-endpoint tests off the real assets dir.
@@ -679,6 +680,85 @@ test('http: GET /api/projects lists saved projects', async () => {
     assert.equal(res.status, 200);
     const ids = (await res.json()).projects.map((x) => x.id);
     assert.ok(ids.includes('http3'));
+  });
+});
+
+// ---------- editor media mapping (edit.js, pure) ----------
+test('edit: assetToUrl maps asset paths to /media URLs and rejects foreign paths', () => {
+  assert.equal(assetToUrl(path.join(MEDIA_DIRS.raw, 'clip_x.mp4')), '/media/raw/clip_x.mp4');
+  assert.equal(assetToUrl(path.join(MEDIA_DIRS.audio, 'voice.mp3')), '/media/audio/voice.mp3');
+  // a basename with a space is URL-encoded
+  assert.equal(assetToUrl(path.join(MEDIA_DIRS.work, 'a b.mp4')), `/media/work/${encodeURIComponent('a b.mp4')}`);
+  // anything outside the known asset roots is rejected (the /media guard)
+  assert.equal(assetToUrl('/etc/passwd'), null);
+  assert.equal(assetToUrl(null), null);
+  assert.equal(assetToUrl(''), null);
+});
+
+test('edit: previewBundle exposes the timeline geometry the live player needs', () => {
+  const p = buildProject({
+    id: 'pv1', opts: { topic: 't' }, plan: { title: 'Demo' }, aspect: '9:16', fps: 30, language: 'English',
+    voiceTrack: { path: '/nowhere/voice.mp3', duration: 9 },
+    captions: { enabled: true, cues: [{ start: 0, end: 4, text: 'hi' }, { start: 4, end: 9, text: 'there' }] },
+    music: null,
+    scenes: [
+      { index: 0, narration: 'a', sourcePath: '/nowhere/s0.mp4', duration: 4, motion: true },
+      { index: 1, narration: 'b', sourcePath: '/nowhere/s1.mp4', duration: 5, motion: false, trim: { in: 1, out: 3 } },
+    ],
+  });
+  const b = previewBundle(p);
+  assert.equal(b.aspect, '9:16');
+  assert.equal(b.voiceDuration, 9);
+  assert.equal(b.scenes.length, 2);
+  assert.equal(b.scenes[0].start, 0);
+  assert.equal(b.scenes[1].start, 4, 'second scene starts after the first');
+  assert.equal(b.scenes[1].motion, false);
+  assert.deepEqual(b.scenes[1].trim, { in: 1, out: 3 });
+  assert.equal(b.captions.cues.length, 2);
+  // foreign source paths map to null url (the UI then offers a footage swap)
+  assert.equal(b.scenes[0].sourceUrl, null);
+});
+
+test('http: GET /api/project/:id/preview returns a media bundle; 404 for unknown', async () => {
+  saveProject(sampleProject('pvhttp'));
+  await withServer(async (base) => {
+    assert.equal((await fetch(`${base}/api/project/nope/preview`)).status, 404);
+    const res = await fetch(`${base}/api/project/pvhttp/preview`);
+    assert.equal(res.status, 200);
+    const b = await res.json();
+    assert.equal(b.id, 'pvhttp');
+    assert.equal(b.scenes.length, 2);
+    assert.ok(b.captions.cues.length >= 1);
+  });
+});
+
+test('http: GET /api/stock/search requires a query', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/stock/search`);
+    assert.equal(res.status, 400);
+    assert.ok((await res.json()).error);
+  });
+});
+
+test('http: POST scene/:index/source validates url and project', async () => {
+  saveProject(sampleProject('swap1'));
+  await withServer(async (base) => {
+    // unknown project → 404
+    assert.equal((await fetch(`${base}/api/project/nope/scene/0/source`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: 'http://x/y.mp4' }),
+    })).status, 404);
+    // missing/!http url → 400
+    const bad = await fetch(`${base}/api/project/swap1/scene/0/source`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: 'not-a-url' }),
+    });
+    assert.equal(bad.status, 400);
+  });
+});
+
+test('http: thumbs/waveform are 404 for an unknown project (no ffmpeg needed)', async () => {
+  await withServer(async (base) => {
+    assert.equal((await fetch(`${base}/api/project/nope/thumbs/0`)).status, 404);
+    assert.equal((await fetch(`${base}/api/project/nope/waveform`)).status, 404);
   });
 });
 

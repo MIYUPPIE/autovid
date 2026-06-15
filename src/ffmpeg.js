@@ -152,6 +152,53 @@ function captionFilter(file, h) {
 }
 
 /**
+ * Extract `count` evenly-spaced thumbnail frames from `input` across the window
+ * [start, start+length] (defaults to the whole clip). Used by the editor's
+ * filmstrip + trim handles. Returns the written jpg paths in time order. Cheap:
+ * one fast keyframe seek per frame, scaled small. Skips frames already on disk
+ * so re-opening a scene is instant.
+ */
+export async function extractThumbs({ input, outBase, count = 8, start = 0, length = null, height = 96 }) {
+  const dur = length || (await probeDuration(input)) || 0;
+  const n = Math.max(1, Math.min(24, Math.round(count)));
+  const step = n > 1 ? dur / n : 0;
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const t = start + step * i + step / 2;            // sample the middle of each slice
+    const file = path.join(config.dirs.work, `${outBase}_t${i}.jpg`);
+    if (!fs.existsSync(file)) {
+      // -ss before -i = fast keyframe seek; -frames:v 1 = a single frame.
+      await ffmpeg(['-ss', Math.max(0, t).toFixed(3), '-i', input, '-frames:v', '1',
+        '-vf', `scale=-2:${height}`, '-q:v', '4', file], 'extractThumbs');
+    }
+    out.push(file);
+  }
+  return out;
+}
+
+/**
+ * Compute a waveform: `buckets` peak amplitudes (0..1) of an audio file, so the
+ * editor can draw the narration and align cuts to the voice. Decodes to low-rate
+ * mono PCM on stdout and takes the max |sample| per bucket. No temp files.
+ */
+export async function extractWaveform({ input, buckets = 800 }) {
+  const { stdout } = await execFileP('ffmpeg',
+    ['-hide_banner', '-loglevel', 'error', '-i', input, '-ac', '1', '-ar', '8000', '-f', 's16le', '-'],
+    { maxBuffer: 1024 * 1024 * 128, encoding: 'buffer' });
+  const samples = new Int16Array(stdout.buffer, stdout.byteOffset, Math.floor(stdout.length / 2));
+  const n = Math.max(1, Math.min(4000, Math.round(buckets)));
+  const per = Math.max(1, Math.floor(samples.length / n));
+  const peaks = new Array(n).fill(0);
+  for (let b = 0; b < n; b++) {
+    let max = 0;
+    const s = b * per, e = Math.min(samples.length, s + per);
+    for (let i = s; i < e; i++) { const a = Math.abs(samples[i]); if (a > max) max = a; }
+    peaks[b] = Math.round((max / 32768) * 1000) / 1000;
+  }
+  return peaks;
+}
+
+/**
  * Single final pass: lay the ONE continuous narration over the silent video,
  * mix ducked background music, burn subtitles, add fades. Returns final mp4.
  */
