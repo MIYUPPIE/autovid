@@ -29,6 +29,17 @@ app.post('/api/music', express.raw({ type: '*/*', limit: '30mb' }), (req, res) =
   res.json({ path: dest });
 });
 
+// --- Raw video upload (footage replacement for the editor) ---
+app.post('/api/clip', express.raw({ type: '*/*', limit: '200mb' }), (req, res) => {
+  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file' });
+  const ext = (req.query.ext || 'mp4').toString().replace(/[^a-z0-9]/gi, '') || 'mp4';
+  const name = `clip_${Date.now()}.${ext}`;
+  const dest = path.join(config.dirs.raw, name);
+  fs.mkdirSync(config.dirs.raw, { recursive: true });
+  fs.writeFileSync(dest, req.body);
+  res.json({ path: dest });
+});
+
 // --- Config / capabilities ---
 app.get('/api/voices', (req, res) => {
   res.json({ voices: VOICES, resolutions: RESOLUTIONS });
