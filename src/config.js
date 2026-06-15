@@ -59,6 +59,9 @@ export const config = {
   maxScenes: parseInt(process.env.MAX_SCENES || '8', 10),
   // Script mode follows the user's own length, so allow more scenes than topic mode.
   maxScriptScenes: parseInt(process.env.MAX_SCRIPT_SCENES || '20', 10),
+  // Per-phrase B-roll (#7): a scene longer than this many seconds is split into
+  // multiple short shots so the picture changes more often (modern pacing).
+  maxShotSeconds: parseInt(process.env.MAX_SHOT_SECONDS || '6', 10),
 
   dirs: {
     raw: path.join(ROOT, 'assets', 'raw'),

@@ -18,7 +18,7 @@ import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
   captionScale, CAPTION_SIZES,
 } from '../src/captions.js';
-import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
+import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
@@ -738,6 +738,40 @@ test('beats: onsetEnvelope rises on an energy step and degenerate input is safe'
   assert.ok(hopSec > 0);
   assert.ok(Math.max(...env) > 0, 'a loud onset produces a positive envelope spike');
   assert.deepEqual(onsetEnvelope(new Int16Array(10), sr, 512).env, []);
+});
+
+// ---------- per-phrase B-roll (#7) ----------
+test('broll: expandScenes splits long scenes into shots, preserving total + order', () => {
+  const scenes = [
+    { index: 1, query: 'lagos market', narration: 'one two three four five six' },
+    { index: 2, query: 'sunrise', narration: 'short scene' },
+  ];
+  const durations = [12, 4]; // scene 1 is long, scene 2 fits in one shot
+  const { scenes: out, durations: od } = expandScenes(scenes, durations, { maxShot: 6, minShot: 2.5 });
+  // Scene 1 (12s) → at least 2 shots; scene 2 (4s) → exactly 1.
+  const fromS1 = out.filter((s) => s.parentIndex === 1);
+  const fromS2 = out.filter((s) => s.parentIndex === 2);
+  assert.ok(fromS1.length >= 2, `long scene splits: got ${fromS1.length}`);
+  assert.equal(fromS2.length, 1, 'short scene stays one shot');
+  // Total duration preserved exactly (video still covers the narration).
+  assert.ok(Math.abs(od.reduce((a, b) => a + b, 0) - 16) < 1e-9);
+  // Every shot carries the parent query and a non-empty index; indexes are 1..M.
+  assert.deepEqual(out.map((s) => s.index), out.map((_, i) => i + 1));
+  assert.ok(fromS1.every((s) => s.query === 'lagos market'));
+  // Narration is sliced across the shots with nothing lost.
+  assert.equal(fromS1.map((s) => s.narration).join(' '), 'one two three four five six');
+});
+
+test('broll: no scene exceeds maxShot → unchanged; each shot >= minShot', () => {
+  const scenes = [{ index: 1, query: 'q', narration: 'a b' }, { index: 2, query: 'q2', narration: 'c d' }];
+  const durations = [5, 4];
+  const { scenes: out, durations: od } = expandScenes(scenes, durations, { maxShot: 6, minShot: 2.5 });
+  assert.equal(out.length, 2, 'short scenes are not split');
+  assert.deepEqual(od, [5, 4]);
+  // A scene that would split into sub-minShot shots is capped so no shot is a blink.
+  const big = expandScenes([{ index: 1, query: 'q', narration: 'x y z' }], [7], { maxShot: 6, minShot: 2.5 });
+  assert.ok(big.durations.every((d) => d >= 2.5 - 1e-9), `each shot >= floor: ${big.durations}`);
+  assert.ok(Math.abs(big.durations.reduce((a, b) => a + b, 0) - 7) < 1e-9);
 });
 
 // ---------- generated-card fallback (#6) ----------

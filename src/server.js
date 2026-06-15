@@ -97,11 +97,12 @@ app.post('/api/render', (req, res) => {
   const autoMusic = Boolean(b.autoMusic);
   const codeSwitch = Boolean(b.codeSwitch); // mix in natural English the way bilingual speakers do
   const beatSync = b.beatSync !== false;    // snap cuts to the music beat (on by default)
+  const bRoll = b.bRoll !== false;          // split long scenes into short shots (on by default)
   const bgMusicPath = b.bgMusicPath && fs.existsSync(b.bgMusicPath) ? b.bgMusicPath : null;
 
   const id = runPipeline({
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync,
+    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll,
   });
   res.json({ jobId: id });
 });
