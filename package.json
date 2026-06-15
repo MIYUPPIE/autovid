@@ -13,7 +13,8 @@
     "eval:yarn": "node test/yarn.smoke.js",
     "eval:render": "node test/render.smoke.js",
     "eval:edit": "node test/edit.smoke.js",
-    "eval:beats": "node test/beats.smoke.js"
+    "eval:beats": "node test/beats.smoke.js",
+    "eval:cards": "node test/cards.smoke.js"
   },
   "dependencies": {
     "express": "^4.19.2",

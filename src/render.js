@@ -16,7 +16,7 @@
 import path from 'path';
 import fs from 'fs';
 import { config } from './config.js';
-import { normalizeClip, concatSilent, finalizeVideo } from './ffmpeg.js';
+import { normalizeClip, concatSilent, finalizeVideo, makeTextCard } from './ffmpeg.js';
 import { buildKaraokeAss } from './captions.js';
 import { planRender, saveProject } from './project.js';
 
@@ -38,6 +38,17 @@ export async function renderProject(project, { onProgress } = {}) {
       continue;
     }
     const input = scene.source?.path;
+    // A generated-card scene has no source clip — regenerate the card instead.
+    if (scene.card && (!input || !fs.existsSync(input))) {
+      emit('normalize', `Scene ${scene.index}: regenerating card`);
+      scene.clip = { path: await makeTextCard({
+        narration: scene.card.narration, query: scene.card.query,
+        outBase: `${project.id}_s${scene.index}`, aspect: project.aspect,
+        targetDur: scene.duration, fps: project.fps, index: scene.index,
+        brand: project.brand || null,
+      }) };
+      continue;
+    }
     if (!input || !fs.existsSync(input)) {
       throw new Error(`scene ${scene.index}: source clip missing (${input || 'none'})`);
     }

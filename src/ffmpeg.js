@@ -4,8 +4,24 @@ import path from 'path';
 import fs from 'fs';
 import { config, RESOLUTIONS } from './config.js';
 import { probeDuration } from './voice.js';
+import { cardPalette, distillCardText, wrapText, cardWrapWidth } from './cards.js';
 
 const execFileP = promisify(execFile);
+
+// Locate a usable bold TTF for drawtext (the generated-card fallback). Cached.
+let _cardFont = null;
+function cardFontFile() {
+  if (_cardFont !== null) return _cardFont;
+  const candidates = [
+    '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf',
+    '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
+    '/usr/share/fonts/TTF/DejaVuSans-Bold.ttf',
+    '/System/Library/Fonts/Supplemental/Arial Bold.ttf',
+  ];
+  _cardFont = candidates.find((f) => { try { return fs.existsSync(f); } catch { return false; } }) || '';
+  return _cardFont;
+}
 
 async function ffmpeg(args, label = 'ffmpeg') {
   try {
@@ -81,6 +97,44 @@ export async function normalizeClip({ input, outBase, aspect, targetDur, fps = 3
     ...(await videoCodecArgs()), '-pix_fmt', 'yuv420p', out);
 
   await ffmpeg(args, 'normalizeClip');
+  return out;
+}
+
+/**
+ * Render a branded TEXT CARD as a scene clip when no stock footage could be
+ * found (#6). Guarantees a render never dies on a single dead query: instead of
+ * throwing "no usable footage", the scene becomes a clean gradient card showing
+ * a short phrase from the narration. Same output contract as normalizeClip (a
+ * silent, frame-sized, exact-duration mp4) so the concat is unchanged.
+ */
+export async function makeTextCard({
+  narration = '', query = '', outBase, aspect, targetDur, fps = 30, index = 0, brand = null,
+}) {
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
+  const out = path.join(config.dirs.work, `${outBase}_norm.mp4`);
+  const [c0, c1] = cardPalette(index, brand);
+  const phrase = wrapText(distillCardText({ narration, query }), cardWrapWidth(aspect));
+
+  // Write the (possibly multi-line, unicode) text to a file so drawtext doesn't
+  // need shell-escaping of diacritics, colons, quotes etc.
+  const txtFile = path.join(config.dirs.work, `${outBase}_card.txt`);
+  fs.writeFileSync(txtFile, phrase, 'utf8');
+
+  const fontSize = Math.round(w * (aspect === '9:16' ? 0.07 : 0.055));
+  const font = cardFontFile();
+  const fontArg = font ? `fontfile='${escapeFilterPath(font)}'` : 'font=sans';
+  const draw =
+    `drawtext=${fontArg}:textfile='${escapeFilterPath(txtFile)}':` +
+    `fontcolor=white:fontsize=${fontSize}:line_spacing=${Math.round(fontSize * 0.35)}:` +
+    'x=(w-text_w)/2:y=(h-text_h)/2:shadowcolor=black@0.6:shadowx=2:shadowy=2';
+
+  // gradients lavfi gives a soft moving background (cheap, no source clip needed).
+  const grad = `gradients=s=${w}x${h}:c0=${c0}:c1=${c1}:x0=0:y0=0:x1=${w}:y1=${h}:d=${targetDur.toFixed(3)}:speed=0.012`;
+  await ffmpeg(['-f', 'lavfi', '-i', grad, '-t', targetDur.toFixed(3), '-an',
+    '-vf', `${draw},fps=${fps},format=yuv420p`, ...(await videoCodecArgs()), '-pix_fmt', 'yuv420p', out],
+    'makeTextCard');
+
+  try { fs.unlinkSync(txtFile); } catch { /* ignore */ }
   return out;
 }
 

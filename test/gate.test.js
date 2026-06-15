@@ -23,6 +23,7 @@ import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
 import { beatGrid, snapToBeats, estimateTempoFromEnvelope, onsetEnvelope } from '../src/beats.js';
+import { distillCardText, wrapText, cardPalette, cardWrapWidth, CARD_PALETTES } from '../src/cards.js';
 import { netReason, downloadToFile, BROWSER_HEADERS } from '../src/http.js';
 import http from 'node:http';
 import { app } from '../src/server.js';
@@ -739,6 +740,37 @@ test('beats: onsetEnvelope rises on an energy step and degenerate input is safe'
   assert.deepEqual(onsetEnvelope(new Int16Array(10), sr, 512).env, []);
 });
 
+// ---------- generated-card fallback (#6) ----------
+test('cards: distillCardText prefers in-language narration, trims, falls back', () => {
+  // Narration wins (so a Yoruba video gets a Yoruba card), trailing punctuation dropped.
+  assert.equal(distillCardText({ narration: 'Ìlú Ìbàdàn tóbi gan an.', query: 'big city' }),
+    'Ìlú Ìbàdàn tóbi gan an');
+  // Long narration is capped to maxWords.
+  assert.equal(distillCardText({ narration: 'one two three four five six seven eight', maxWords: 3 }),
+    'one two three');
+  // No narration → English query; nothing at all → the mark.
+  assert.equal(distillCardText({ narration: '', query: 'lagos market' }), 'lagos market');
+  assert.equal(distillCardText({ narration: '   ', query: '' }), '✦');
+});
+
+test('cards: wrapText breaks on spaces within the width, never splitting a word', () => {
+  const out = wrapText('the quick brown fox jumps over', 10);
+  const lines = out.split('\n');
+  assert.ok(lines.every((l) => l.length <= 10 || l.split(' ').length === 1), `lines fit: ${JSON.stringify(lines)}`);
+  assert.equal(out.replace(/\n/g, ' '), 'the quick brown fox jumps over', 'no words lost');
+  // A single over-long word survives intact on its own line.
+  assert.equal(wrapText('supercalifragilistic', 8), 'supercalifragilistic');
+  assert.equal(wrapText('   ', 10), '');
+});
+
+test('cards: palette cycles by index, honors a brand override, width by aspect', () => {
+  assert.deepEqual(cardPalette(0), CARD_PALETTES[0]);
+  assert.deepEqual(cardPalette(CARD_PALETTES.length), CARD_PALETTES[0], 'wraps around');
+  assert.deepEqual(cardPalette(-1), CARD_PALETTES[CARD_PALETTES.length - 1], 'negative index safe');
+  assert.deepEqual(cardPalette(2, { cardColors: ['#fff', '#000'] }), ['#fff', '#000'], 'brand overrides');
+  assert.ok(cardWrapWidth('9:16') < cardWrapWidth('16:9'), 'portrait wraps sooner');
+});
+
 // ---------- HTTP contract ----------
 async function withServer(fn) {
   const server = app.listen(0);
@@ -1043,6 +1075,10 @@ test('netReason: surfaces the real cause when node-fetch leaves .message empty',
   assert.equal(netReason(Object.assign(new Error(''), { cause: { code: 'UND_ERR_SOCKET' } })), 'UND_ERR_SOCKET');
   assert.equal(netReason(new Error('HTTP 404')), 'HTTP 404'); // real messages pass through
   assert.equal(netReason(Object.assign(new Error(''), {})), 'network error'); // never blank
+  // The exact bug: node-fetch's message ends in "reason: " with the code in .code.
+  // We must append the code so it doesn't read as a dead end.
+  const real = Object.assign(new Error('request to https://cdn.pixabay.com/x.mp4 failed, reason: '), { code: 'ETIMEDOUT' });
+  assert.match(netReason(real), /reason: ETIMEDOUT$/);
 });
 
 test('downloadToFile: sends a browser User-Agent (not node-fetch)', async () => {
