@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
 import { ensureDirs, probeDuration } from './voice.js';
-import { runPipeline, getJob, startProjectRender } from './pipeline.js';
+import { runPipeline, runMultiPipeline, getJob, startProjectRender } from './pipeline.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects, hashOf } from './project.js';
 import { activeLlm } from './llm.js';
 import { CAPTION_SIZES, CAPTION_ANIMS } from './captions.js';
@@ -71,12 +71,12 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// --- Start a render ---
-app.post('/api/render', (req, res) => {
-  const b = req.body || {};
+// Build a validated render-opts object from a request body. Throws { status, error }
+// on a bad request (empty topic+script). Shared by /api/render and /api/render/multi.
+function buildRenderOpts(b = {}) {
   const topic = (b.topic || '').toString().trim();
   const script = (b.script || '').toString().trim();
-  if (!topic && !script) return res.status(400).json({ error: 'topic or script is required' });
+  if (!topic && !script) { const e = new Error('topic or script is required'); e.status = 400; throw e; }
 
   const context = b.context === 'africa' ? 'africa' : 'global';
   const aspect = RESOLUTIONS[b.aspect] ? b.aspect : '16:9';
@@ -102,11 +102,32 @@ app.post('/api/render', (req, res) => {
   const transition = TRANSITIONS[b.transition] !== undefined ? b.transition : 'cut'; // scene crossfade (#8)
   const bgMusicPath = b.bgMusicPath && fs.existsSync(b.bgMusicPath) ? b.bgMusicPath : null;
 
-  const id = runPipeline({
+  return {
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
     subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll, transition,
-  });
-  res.json({ jobId: id });
+  };
+}
+
+// --- Start a render ---
+app.post('/api/render', (req, res) => {
+  let opts;
+  try { opts = buildRenderOpts(req.body); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  res.json({ jobId: runPipeline(opts) });
+});
+
+// --- Multi-language one-shot (#1): one idea → N narrated videos at once ---
+app.post('/api/render/multi', (req, res) => {
+  let opts;
+  try { opts = buildRenderOpts(req.body); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  const voices = Array.isArray(req.body?.voices) ? req.body.voices.filter(isValidVoice) : [];
+  try {
+    const batch = runMultiPipeline({ ...opts, voices });
+    res.json(batch);
+  } catch (e) {
+    res.status(400).json({ error: e.message });
+  }
 });
 
 // --- Editable projects (timeline documents behind each video) ---

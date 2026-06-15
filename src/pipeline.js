@@ -186,6 +186,31 @@ export function allocateDurations(sceneTexts, total, floor = 2.5) {
  * { topic, context:'africa'|'global', aspect, targetSeconds, tone, voice, rate,
  *   subtitles:bool, bgMusicPath:string|null, fades:bool, motion:bool, autoMusic:bool }
  */
+/**
+ * Multi-language one-shot (#1): one idea/script → N narrated videos at once, one
+ * per chosen voice/language. Each is a full independent pipeline run (its own
+ * narration, durations, footage), launched together so a creator gets the Yorùbá,
+ * Igbo, Hausa and English cuts from a single action. Returns a batch descriptor:
+ *   { batchId, jobs: [{ voice, language, jobId }] }
+ * `voices` is deduped; the optional base `opts.voice` is included too.
+ */
+export function runMultiPipeline(opts) {
+  const wanted = [];
+  const seen = new Set();
+  for (const v of [opts.voice, ...(opts.voices || [])]) {
+    if (v && getVoice(v) && !seen.has(v)) { seen.add(v); wanted.push(v); }
+  }
+  if (wanted.length === 0) throw new Error('no valid voices for a multi-language batch');
+  const batchId = nanoid(10);
+  const jobsOut = wanted.map((voice) => {
+    const language = getVoice(voice)?.lang || 'English';
+    // Strip voice2 so each variant is a single-language render in `voice`.
+    const jobId = runPipeline({ ...opts, voice, voice2: null, batchId });
+    return { voice, language, jobId };
+  });
+  return { batchId, jobs: jobsOut };
+}
+
 export function runPipeline(opts) {
   const id = nanoid(10);
   const job = {
