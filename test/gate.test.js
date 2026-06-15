@@ -16,6 +16,7 @@ import { activeLlm, llmChat } from '../src/llm.js';
 import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
 import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
+  captionScale, CAPTION_SIZES,
 } from '../src/captions.js';
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
@@ -350,6 +351,44 @@ test('captions: long line is split so it fits the frame width', () => {
   assert.ok(dlg.length >= 3, `long text should break into several cues, got ${dlg.length}`);
   const shown = dlg.map((d) => d.split(',').slice(9).join(',').replace(/\{\\k\d+\}/g, '')).join(' ').replace(/\s+/g, ' ').trim();
   assert.equal(shown.split(' ').length, text.split(' ').length, 'no words lost across wrapped lines');
+});
+
+// ---------- caption size ----------
+const assFontSize = (ass) => Number(/^Style: Default,[^,]+,(\d+),/m.exec(ass)[1]);
+
+test('captions: captionScale maps named sizes and clamps raw scale', () => {
+  assert.equal(captionScale({}), 1, 'no size → Medium');
+  assert.equal(captionScale({ size: 'S' }), CAPTION_SIZES.S);
+  assert.equal(captionScale({ size: 'XL' }), CAPTION_SIZES.XL);
+  assert.equal(captionScale({ size: 'bogus' }), 1, 'unknown name → Medium');
+  assert.equal(captionScale({ scale: 1.4 }), 1.4, 'raw scale honored');
+  assert.equal(captionScale({ scale: 99 }), 2.5, 'clamped high');
+  assert.equal(captionScale({ scale: 0.1 }), 0.5, 'clamped low');
+  assert.ok(captionScale({ scale: 1.1 }) === 1.1); // numeric scale wins over default
+});
+
+test('captions: size picker scales the burned-in font (S < M < L < XL)', () => {
+  const sizes = ['S', 'M', 'L', 'XL'].map((size) => {
+    const assPath = path.join(os.tmpdir(), `av_sz_${size}_${Date.now()}.ass`);
+    buildKaraokeAss({ text: 'Ndi Igbo kwenu. Daalu.', duration: 6, aspect: '16:9', assPath, style: { size } });
+    const fs0 = assFontSize(fs.readFileSync(assPath, 'utf8'));
+    fs.unlinkSync(assPath);
+    return fs0;
+  });
+  assert.ok(sizes[0] < sizes[1] && sizes[1] < sizes[2] && sizes[2] < sizes[3],
+    `expected strictly increasing font sizes, got ${sizes.join(' < ')}`);
+  // Medium matches the historical width-based default (5.8% of 1920).
+  assert.equal(sizes[1], Math.round(RESOLUTIONS['16:9'].w * 0.058));
+  // Large is the default times the L multiplier.
+  assert.equal(sizes[2], Math.round(RESOLUTIONS['16:9'].w * 0.058 * CAPTION_SIZES.L));
+});
+
+test('captions: explicit fontSize overrides the size multiplier', () => {
+  const assPath = path.join(os.tmpdir(), `av_fs_${Date.now()}.ass`);
+  buildKaraokeAss({ text: 'hello there', duration: 3, aspect: '16:9', assPath, style: { size: 'XL', fontSize: 40 } });
+  const fsz = assFontSize(fs.readFileSync(assPath, 'utf8'));
+  fs.unlinkSync(assPath);
+  assert.equal(fsz, 40, 'raw fontSize wins outright');
 });
 
 test('captions: nothing to show → null (no file, no crash)', () => {

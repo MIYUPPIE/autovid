@@ -166,6 +166,7 @@ export function runPipeline(opts) {
       const {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
+        captionStyle = {},
       } = opts;
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
@@ -223,7 +224,8 @@ export function runPipeline(opts) {
         if (subtitles && track.cues.length) {
           captionCues = track.cues;
           captionsPath = buildKaraokeAss({
-            cues: track.cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
+            cues: track.cues, aspect, style: captionStyle,
+            assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
           });
         }
       } else {
@@ -247,8 +249,8 @@ export function runPipeline(opts) {
             : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
           captionCues = cues && cues.length ? cues : null;
           captionsPath = cues && cues.length
-            ? buildKaraokeAss({ cues, aspect, assPath })
-            : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath });
+            ? buildKaraokeAss({ cues, aspect, assPath, style: captionStyle })
+            : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath, style: captionStyle });
         }
         durations = allocateDurations(sceneTexts, m.duration);
       }
@@ -315,7 +317,7 @@ export function runPipeline(opts) {
         id, opts, plan, aspect, fps: 30,
         language: bilingual ? `${language} + ${language2}` : language, bilingual,
         voiceTrack: { path: master.audioPath, duration: masterDur },
-        captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [] },
+        captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [], style: captionStyle },
         music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta } : null,
         scenes: plan.scenes.map((sc, i) => ({
           index: sc.index, narration: sc.narration, query: sc.query,

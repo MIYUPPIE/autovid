@@ -125,6 +125,22 @@ export function groupIntoLines(words, { maxWords = 6, maxChars = 32 } = {}) {
   return lines;
 }
 
+// ---- caption sizing -----------------------------------------------------
+
+// Named caption sizes → multiplier on the width-based default font. The default
+// (M = 1) renders at ~5.8% of frame width; the others scale around it. Shared by
+// the UI (the size picker) and the server (name → scale) so there's one source.
+export const CAPTION_SIZES = { S: 0.78, M: 1, L: 1.3, XL: 1.6 };
+
+// Resolve a caption style to a font multiplier. Accepts an explicit numeric
+// `scale` (clamped) or a named `size`; falls back to 1 (Medium).
+export function captionScale(style = {}) {
+  const n = Number(style.scale);
+  if (n > 0) return Math.max(0.5, Math.min(2.5, n));
+  if (style.size && CAPTION_SIZES[style.size]) return CAPTION_SIZES[style.size];
+  return 1;
+}
+
 // ---- ASS rendering ------------------------------------------------------
 
 function assTime(sec) {
@@ -191,8 +207,12 @@ export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath
   if (words.length === 0) return null;
   const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
   // Size the font off WIDTH, not height: a height-based size blows up on 9:16
-  // vertical (narrow frame) and runs lines off-screen.
-  const fontSize = style.fontSize || Math.round(w * 0.058);
+  // vertical (narrow frame) and runs lines off-screen. The user-chosen size
+  // (named S/M/L/XL or a raw `scale`) multiplies the width-based default; an
+  // explicit `fontSize` wins outright for full manual control.
+  const fontSize = style.fontSize
+    ? Math.max(8, Math.round(style.fontSize))
+    : Math.round(w * 0.058 * captionScale(style));
   // Max chars that fit one line inside the horizontal margins (avg glyph ≈ 0.55em),
   // so a line never overflows the frame. WrapStyle 0 catches anything left over.
   const usable = w * 0.88;
@@ -200,7 +220,7 @@ export function buildKaraokeAss({ text, duration, cues, aspect = '16:9', assPath
   const grouping = { maxWords: style.maxWords || 6, maxChars: style.maxChars || fitChars };
   const lines = groupIntoLines(words, grouping);
   const body = lines.map(lineToDialogue).join('\n');
-  const ass = `${assHeader({ w, h, fontSize, ...style })}\n${body}\n`;
+  const ass = `${assHeader({ w, h, ...style, fontSize })}\n${body}\n`;
   fs.writeFileSync(assPath, ass, 'utf8');
   return assPath;
 }

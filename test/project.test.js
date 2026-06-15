@@ -125,6 +125,16 @@ test('plan: editing a caption re-renders ONLY the final mux', () => {
   assert.equal(plan.final, true, 'only the mux/caption-burn re-runs');
 });
 
+test('plan: resizing captions re-renders ONLY the final mux', () => {
+  const p = freshProject();
+  p.captions.style = { ...(p.captions.style || {}), size: 'XL' };
+  const plan = planRender(p, p.render);
+  assert.equal(plan.scenes[0], false, 'no footage re-encode');
+  assert.equal(plan.scenes[1], false);
+  assert.equal(plan.concat, false, 'no re-stitch');
+  assert.equal(plan.final, true, 'caption size change re-burns the mux only');
+});
+
 test('plan: changing music volume re-renders only the final mux', () => {
   const p = freshProject();
   p.audio.music.volume = 0.3;
