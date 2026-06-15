@@ -113,6 +113,8 @@ export async function renderProject(project, { onProgress } = {}) {
     aspect: project.aspect,
     fades: project.effects?.fades !== false,
     logo: project.brand?.logoPath || null,
+    logoPosition: project.brand?.logoPosition || 'br',
+    logoScale: project.brand?.logoScale || 0.12,
     outName,
   });
 

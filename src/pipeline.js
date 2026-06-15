@@ -647,7 +647,8 @@ export function runPipeline(opts) {
       emit(job, 'render', 'Mixing audio and rendering final video…', 90);
       const finalPath = await finalizeVideo({
         silentVideo: silent, voiceAudio, captions: captionsPath,
-        bgMusic, aspect, fades, outName: `${id}_final.mp4`, logo: brand.logoPath,
+        bgMusic, aspect, fades, outName: `${id}_final.mp4`,
+        logo: brand.logoPath, logoPosition: brand.logoPosition, logoScale: brand.logoScale,
       });
 
       // 8. Persist the editable project document (the timeline behind this MP4).

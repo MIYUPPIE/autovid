@@ -14,9 +14,16 @@ const clampSec = (v, def, lo, hi) => {
 };
 const hexOr = (v, def) => (typeof v === 'string' && HEX.test(v.trim()) ? v.trim() : def);
 
+// Nine logo anchor points (corners, edges, center), same scheme as the caption
+// position picker: [tm]op/[m]iddle/[b]ottom × [l]eft/[c]enter/[r]ight.
+export const LOGO_POSITIONS = ['tl', 'tc', 'tr', 'ml', 'mc', 'mr', 'bl', 'bc', 'br'];
+const posOr = (v, def) => (LOGO_POSITIONS.includes(v) ? v : def);
+
 export const DEFAULT_BRAND = {
   name: '',
   logoPath: null,                       // absolute path to an uploaded logo image, or null
+  logoPosition: 'br',                   // where the watermark sits (see LOGO_POSITIONS)
+  logoScale: 0.12,                      // logo width as a fraction of the video width
   primaryColor: '#E8B04B',              // warm gold (GriotVid identity)
   accentColor: '#1A1206',
   cardColors: ['#1A1206', '#3A2A0C'],   // gradient for generated cards (#6)
@@ -35,6 +42,8 @@ export function normalizeBrand(input = {}) {
   return {
     name: String(b.name || '').slice(0, 60),
     logoPath: b.logoPath ? String(b.logoPath) : null,
+    logoPosition: posOr(b.logoPosition, DEFAULT_BRAND.logoPosition),
+    logoScale: clampSec(b.logoScale, DEFAULT_BRAND.logoScale, 0.04, 0.4),
     primaryColor: hexOr(b.primaryColor, DEFAULT_BRAND.primaryColor),
     accentColor: hexOr(b.accentColor, DEFAULT_BRAND.accentColor),
     cardColors: [hexOr(cc[0], DEFAULT_BRAND.cardColors[0]), hexOr(cc[1], DEFAULT_BRAND.cardColors[1])],
