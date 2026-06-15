@@ -13,6 +13,7 @@ import { CAPTION_SIZES } from './captions.js';
 import { MEDIA_DIRS, previewBundle, resolveAssetPath } from './edit.js';
 import { extractThumbs, extractWaveform } from './ffmpeg.js';
 import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
+import { buildShareKit, lanBaseUrl } from './share.js';
 
 ensureDirs();
 
@@ -140,6 +141,26 @@ app.post('/api/project/:id/render', (req, res) => {
   const jobId = startProjectRender(req.params.id);
   if (!jobId) return res.status(404).json({ error: 'not found' });
   res.json({ jobId });
+});
+
+// Share kit: caption + hashtags + per-platform composer links for a rendered
+// video, plus the absolute file URL the in-browser native share sheet hands to
+// the OS. 409 if the video hasn't been rendered yet (nothing to share).
+app.get('/api/project/:id/share', (req, res) => {
+  const p = loadProject(req.params.id);
+  if (!p) return res.status(404).json({ error: 'not found' });
+  const out = p.render?.outputPath;
+  const fallback = path.join(config.dirs.output, `${p.id}_final.mp4`);
+  const file = out && fs.existsSync(out)
+    ? path.basename(out)
+    : (fs.existsSync(fallback) ? path.basename(fallback) : null);
+  if (!file) return res.status(409).json({ error: 'render the video before sharing' });
+
+  // SHARE_BASE_URL wins (tunnel/domain); otherwise use the origin the client
+  // actually reached us on so the link resolves at least on this network.
+  const baseUrl = config.shareBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const lanUrl = config.shareBaseUrl ? null : lanBaseUrl(config.port, req.protocol);
+  res.json(buildShareKit({ project: p, file, baseUrl, lanUrl }));
 });
 
 // --- Live-preview editor support ---

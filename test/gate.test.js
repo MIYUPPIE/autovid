@@ -21,6 +21,7 @@ import {
 import { runPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
+import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
 import { app } from '../src/server.js';
 
 // Keep project-endpoint tests off the real assets dir.
@@ -557,6 +558,67 @@ test('stock: equal-scored providers interleave so Pixabay is reachable', () => {
   assert.equal(interleaveByScore(pex, pix, 'landscape', true)[0].provider, 'pixabay');
 });
 
+// ---------- share kit (share.js, pure) ----------
+test('share: hashtags drop stopwords/short tokens, add aspect tags, dedupe, cap', () => {
+  const tags = buildHashtags({ title: 'How to Cook the Best Jollof Rice', aspect: '9:16' });
+  // Stopwords ("How","to","the") and <3-char tokens are gone; topical words stay.
+  assert.ok(tags.includes('#Cook') && tags.includes('#Jollof') && tags.includes('#Rice'));
+  assert.ok(!tags.some((t) => /^#(How|to|the)$/i.test(t)), 'no stopword hashtags');
+  // Vertical aspect contributes the short-form destination tags.
+  assert.ok(tags.includes('#Shorts') && tags.includes('#TikTok'));
+  assert.ok(tags.length <= 8, 'tag count is capped');
+  assert.equal(new Set(tags.map((t) => t.toLowerCase())).size, tags.length, 'no dupes');
+  // Landscape gets YouTube instead of Shorts/TikTok.
+  assert.ok(buildHashtags({ title: 'Lagos Markets', aspect: '16:9' }).includes('#YouTube'));
+});
+
+test('share: short caption fits the tweet budget; long caption carries the hashtag block', () => {
+  const longTitle = 'A'.repeat(400);
+  const hashtags = ['#One', '#Two', '#Three', '#Four'];
+  const { short, long } = buildCaptions({ title: longTitle, hashtags });
+  // Tweet text + the 23-char link cost must stay within 280.
+  assert.ok(short.length + 23 <= 280, `short caption + link must fit 280, got ${short.length + 23}`);
+  assert.ok(short.includes('…'), 'over-budget title is truncated with an ellipsis');
+  // Long caption is the title plus a hashtag line.
+  assert.ok(long.startsWith(longTitle.slice(0, 10)));
+  assert.ok(long.includes('#One #Two #Three #Four'));
+  // No-hashtag case still yields a usable caption.
+  assert.equal(buildCaptions({ title: 'Hi', hashtags: [] }).long, 'Hi');
+});
+
+test('share: platform links cover every network and URL-encode the video link', () => {
+  const links = buildPlatformLinks({
+    url: 'http://host:3000/output/v.mp4', title: 'My Video', captions: { short: 'short', long: 'long' },
+  });
+  const ids = links.map((l) => l.id);
+  for (const want of ['x', 'whatsapp', 'facebook', 'telegram', 'linkedin', 'reddit', 'email']) {
+    assert.ok(ids.includes(want), `missing ${want}`);
+  }
+  const enc = encodeURIComponent('http://host:3000/output/v.mp4');
+  assert.ok(links.find((l) => l.id === 'x').href.includes(enc), 'tweet link carries the encoded url');
+  assert.ok(links.find((l) => l.id === 'email').href.startsWith('mailto:'), 'email is a mailto');
+  assert.ok(links.every((l) => /^https?:|^mailto:/.test(l.href)), 'every href is a real scheme');
+});
+
+test('share: lanBaseUrl returns a well-formed origin or null', () => {
+  const lan = lanBaseUrl(3000);
+  assert.ok(lan === null || /^http:\/\/\d+\.\d+\.\d+\.\d+:3000$/.test(lan), `bad lan url: ${lan}`);
+});
+
+test('share: buildShareKit assembles file url (trailing slash trimmed) + lan file url', () => {
+  const project = { id: 'k1', title: 'Sunset Timelapse', aspect: '9:16', language: 'English' };
+  const kit = buildShareKit({
+    project, file: 'k1_final.mp4', baseUrl: 'http://host:3000/', lanUrl: 'http://192.168.1.5:3000',
+  });
+  assert.equal(kit.fileUrl, 'http://host:3000/output/k1_final.mp4', 'trailing slash trimmed, no //');
+  assert.equal(kit.lanFileUrl, 'http://192.168.1.5:3000/output/k1_final.mp4');
+  assert.ok(kit.hashtags.includes('#Sunset'));
+  assert.ok(kit.captions.long && kit.captions.short);
+  assert.equal(kit.platforms.length, 7);
+  // No LAN url → null, not undefined.
+  assert.equal(buildShareKit({ project, file: 'k1_final.mp4', baseUrl: 'http://host' }).lanFileUrl, null);
+});
+
 // ---------- HTTP contract ----------
 async function withServer(fn) {
   const server = app.listen(0);
@@ -684,6 +746,41 @@ test('http: PUT /api/project/:id saves a valid edit and relayouts; rejects inval
       method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(p),
     })).status, 404);
   });
+});
+
+test('http: GET /api/project/:id/share is 404 unknown, 409 unrendered, 200 with a kit', async () => {
+  const outDir = fs.mkdtempSync(path.join(os.tmpdir(), 'av_gate_out_'));
+  const savedOut = config.dirs.output;
+  config.dirs.output = outDir;
+  try {
+    // Unrendered project → 409 (nothing to share yet).
+    saveProject(sampleProject('share_none'));
+    // Rendered project → an mp4 exists at render.outputPath.
+    const rendered = sampleProject('share_ok');
+    const mp4 = path.join(outDir, 'share_ok_final.mp4');
+    fs.writeFileSync(mp4, 'fake mp4');
+    rendered.render = { outputPath: mp4 };
+    saveProject(rendered);
+
+    await withServer(async (base) => {
+      assert.equal((await fetch(`${base}/api/project/nope/share`)).status, 404);
+
+      const none = await fetch(`${base}/api/project/share_none/share`);
+      assert.equal(none.status, 409, 'unrendered project cannot be shared');
+      assert.ok((await none.json()).error);
+
+      const ok = await fetch(`${base}/api/project/share_ok/share`);
+      assert.equal(ok.status, 200);
+      const kit = await ok.json();
+      assert.equal(kit.file, 'share_ok_final.mp4');
+      assert.ok(kit.fileUrl.endsWith('/output/share_ok_final.mp4'));
+      assert.equal(kit.platforms.length, 7);
+      assert.ok(Array.isArray(kit.hashtags) && kit.captions.long);
+    });
+  } finally {
+    config.dirs.output = savedOut;
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
 });
 
 test('http: POST /api/project/:id/render is 404 for an unknown project', async () => {

@@ -25,6 +25,11 @@ export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   ttsEngine: process.env.TTS_ENGINE || 'edge-tts',
 
+  // Public origin a shared link should point at. Empty = derive from the request
+  // host (localhost/LAN). Set this when the app is reached through a tunnel or a
+  // real domain so the links a post carries resolve for other people.
+  shareBaseUrl: process.env.SHARE_BASE_URL || '',
+
   // YarnGPT — hosted Nigerian-language TTS for Yoruba / Igbo / Hausa.
   yarnKey: process.env.YARN_API_KEY || '',
   yarnBase: process.env.YARN_BASE || 'https://yarngpt.ai/api/v1',

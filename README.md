@@ -130,6 +130,18 @@ A real, vanilla timeline editor is built into the UI — no separate app, no fra
 
 > Next phase: swap the hand-rolled preview for `@remotion/player` so the on-screen preview is byte-identical to the export. The project doc already maps 1:1 to a Remotion composition; export stays on this nvenc pipeline.
 
+## Share to any platform
+Every finished video gets a **📤 Share** button (under the result, and in the editor head). It opens a share sheet with two honest paths to "any platform" — no cloud upload, no third-party host:
+
+- **Share to an app…** — uses the browser's native **Web Share API** (level 2). On a phone (and supporting desktops) it hands the actual MP4 to the OS share sheet, which routes to *every* installed app: Instagram, TikTok, WhatsApp, Messages, Drive. This is the real cross-platform path. Falls back to sharing link + caption where file-share isn't supported.
+- **Post to** — pre-filled web composers for **X, WhatsApp, Facebook, Telegram, LinkedIn, Reddit, and email**. Each opens that network's own dialog seeded with a tailored caption + the video link.
+- **Caption + hashtags** — auto-built from the title and aspect ratio (vertical → `#Shorts #Reels #TikTok`, landscape → `#YouTube`), editable in place, with one-click **Copy caption** / **Copy link** / **Download MP4**. The X caption is trimmed to fit the 280-char limit (including the 23-char link cost).
+- **Open on your phone** — shows the LAN URL (`http://<your-ip>:3000/...`) so a desktop user can open the app on their phone (same Wi-Fi) and post natively from there.
+
+The link a post carries is the address you reached the app on. Set `SHARE_BASE_URL` in `.env` when you serve through a tunnel or domain so the links resolve for other people. Contract: `GET /api/project/:id/share` → `{ fileUrl, lanFileUrl, hashtags, captions:{long,short}, platforms:[…] }` (404 unknown, 409 if not rendered yet). Logic lives in `src/share.js` (pure, deterministic, gate-tested).
+
+> Future: a one-click cloud upload (S3/R2 + public URL) would make the per-network link buttons resolve for anyone, not just the same network. That's a hosting/credential choice, not built here.
+
 ## Notes
 - Stock licenses: Pexels & Pixabay are free for commercial use, no attribution required. Keep records if your platform needs them.
 - If a scene query returns nothing, Grok is asked for alternative queries automatically.
