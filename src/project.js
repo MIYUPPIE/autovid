@@ -55,7 +55,7 @@ export function buildProject(parts) {
   const now = Date.now();
   const {
     id, opts = {}, plan = {}, aspect = '16:9', fps = 30,
-    language = 'English', bilingual = false,
+    language = 'English', bilingual = false, brand = null,
     voiceTrack, captions = {}, music = null, scenes = [],
   } = parts;
 
@@ -91,6 +91,9 @@ export function buildProject(parts) {
     fps,
     language,
     bilingual: Boolean(bilingual),
+    // Brand snapshot (#10): logo + card colours so re-renders stay on-brand even
+    // if the global brand kit later changes.
+    brand: brand ? { logoPath: brand.logoPath || null, cardColors: brand.cardColors || null } : null,
     duration: voiceTrack?.duration || start,
     effects: {
       fades: opts.fades !== false,
@@ -215,7 +218,7 @@ export function loadProject(id) {
 export function listProjects() {
   if (!fs.existsSync(config.dirs.projects)) return [];
   return fs.readdirSync(config.dirs.projects)
-    .filter((f) => f.endsWith('.json'))
+    .filter((f) => f.endsWith('.json') && !f.startsWith('_')) // skip _brand.json etc.
     .map((f) => {
       try {
         const p = JSON.parse(fs.readFileSync(path.join(config.dirs.projects, f), 'utf8'));

@@ -140,6 +140,22 @@ export async function makeShort({ input, start, end, aspect = '9:16', captions =
   return out;
 }
 
+/**
+ * Pad an audio track with leading/trailing silence (#10 intro/outro bookends), so
+ * the branded cards have time to play while the voice timeline stays one piece.
+ * Returns the new path (or the input unchanged when no padding is asked).
+ */
+export async function padAudio({ input, outBase, lead = 0, trail = 0 }) {
+  if (lead <= 0 && trail <= 0) return input;
+  const out = path.join(config.dirs.audio, `${outBase}_pad.mp3`);
+  const chain = [];
+  if (lead > 0) chain.push(`adelay=${Math.round(lead * 1000)}:all=1`);
+  if (trail > 0) chain.push(`apad=pad_dur=${trail.toFixed(3)}`);
+  await ffmpeg(['-i', input, '-af', chain.join(','), '-ac', '2', '-ar', '44100',
+    '-c:a', 'libmp3lame', '-q:a', '4', out], 'padAudio');
+  return out;
+}
+
 /** Extract an audio track (mp3) from a video for transcription. Returns the path. */
 export async function extractAudio({ input, outBase }) {
   const out = path.join(config.dirs.audio, `${outBase}_src.mp3`);
@@ -355,9 +371,9 @@ export async function extractWaveform({ input, buckets = 800 }) {
  */
 export async function finalizeVideo({
   silentVideo, voiceAudio, captions = null, bgMusic = null, musicVolume = 0.12,
-  aspect, fades = true, outName,
+  aspect, fades = true, outName, logo = null,
 }) {
-  const { h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['16:9'];
   const out = path.join(config.dirs.output, outName);
   const dur = await probeDuration(voiceAudio);
 
@@ -369,7 +385,10 @@ export async function finalizeVideo({
   }
 
   const parts = [];
-  parts.push(`[0:v]${vChain.length ? vChain.join(',') : 'copy'}[vout]`);
+  const hasLogo = logo && fs.existsSync(logo);
+  // Build the base video, then (if branded) overlay the logo bottom-right (#10).
+  const baseLabel = hasLogo ? '[vbase]' : '[vout]';
+  parts.push(`[0:v]${vChain.length ? vChain.join(',') : 'copy'}${baseLabel}`);
 
   let aMap = '1:a';
   if (bgMusic && fs.existsSync(bgMusic)) {
@@ -384,6 +403,18 @@ export async function finalizeVideo({
     const src = aMap === '1:a' ? '[1:a]' : aMap;
     parts.push(`${src}afade=t=in:st=0:d=0.6,afade=t=out:st=${Math.max(0, dur - 0.6).toFixed(2)}:d=0.6[aout]`);
     aMap = '[aout]';
+  }
+
+  // Logo watermark (#10): overlay the brand logo, scaled to ~12% width, in the
+  // bottom-right with a small margin. Added as the last input so audio indices
+  // above are untouched.
+  if (hasLogo) {
+    const logoIdx = (bgMusic && fs.existsSync(bgMusic)) ? 3 : 2;
+    inputs.push('-i', logo);
+    const lw = Math.round(w * 0.12);
+    const margin = Math.round(w * 0.03);
+    parts.push(`[${logoIdx}:v]scale=${lw}:-1[lg]`);
+    parts.push(`[vbase][lg]overlay=W-w-${margin}:H-h-${margin}[vout]`);
   }
 
   const args = [...inputs, '-filter_complex', parts.join(';'),

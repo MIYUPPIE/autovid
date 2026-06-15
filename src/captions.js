@@ -141,6 +141,18 @@ export function captionScale(style = {}) {
   return 1;
 }
 
+// Convert a CSS #RRGGBB (or #RGB) colour to an ASS &HAABBGGRR string (opaque).
+// ASS orders bytes BGR, not RGB. Returns null for bad input. Pure. Lets the brand
+// kit (#10) drive caption colours. e.g. #FF0000 → &H000000FF.
+export function hexToAss(hex) {
+  if (typeof hex !== 'string') return null;
+  let h = hex.trim().replace(/^#/, '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (!/^[0-9a-f]{6}$/i.test(h)) return null;
+  const r = h.slice(0, 2), g = h.slice(2, 4), b = h.slice(4, 6);
+  return `&H00${b}${g}${r}`.toUpperCase();
+}
+
 // ---- caption animation presets ------------------------------------------
 
 // Per-line entrance animation (#8). Returns an ASS override block injected at the
