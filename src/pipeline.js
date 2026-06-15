@@ -134,6 +134,44 @@ export function buildSceneTexts(plan) {
   });
 }
 
+/**
+ * Per-phrase B-roll (#7): split each long scene into several short SHOTS so the
+ * picture changes every few seconds instead of holding one clip for ~10s — the
+ * dense pacing modern short-form expects. Narration/captions are global (anchored
+ * to the audio), so splitting a scene visually is safe: it only changes WHICH clip
+ * shows when. Each shot reuses the parent's query; the pipeline's clip-dedup gives
+ * each shot DIFFERENT footage, so one scene becomes a mini montage.
+ *
+ * Pure. Returns { scenes, durations } renumbered 1..M, with the total duration and
+ * order preserved (each scene's shots sum to its original duration). A scene at or
+ * under `maxShot` stays a single shot; narration is sliced across shots by word so
+ * the card-fallback text of each shot still reflects what's being said then.
+ */
+export function expandScenes(scenes, durations, { maxShot = 6, minShot = 2.5 } = {}) {
+  const outScenes = [];
+  const outDur = [];
+  scenes.forEach((sc, i) => {
+    const d = durations[i] || 0;
+    const k = d > maxShot ? Math.min(Math.floor(d / minShot), Math.ceil(d / maxShot)) : 1;
+    const shots = Math.max(1, k);
+    const words = String(sc.narration || '').trim().split(/\s+/).filter(Boolean);
+    for (let j = 0; j < shots; j++) {
+      const slice = shots > 1
+        ? words.slice(Math.floor((j * words.length) / shots), Math.floor(((j + 1) * words.length) / shots)).join(' ')
+        : (sc.narration || '');
+      outScenes.push({
+        index: outScenes.length + 1,
+        query: sc.query,
+        narration: slice || sc.narration || '',
+        parentIndex: sc.index,
+      });
+      // Distribute the scene's seconds evenly across its shots (sum preserved).
+      outDur.push(d / shots);
+    }
+  });
+  return { scenes: outScenes, durations: outDur };
+}
+
 // Split `total` seconds across scenes proportional to text length; never below a
 // floor so no clip is a blink. Sum may slightly exceed total — the final mux trims
 // the video to the audio length, so video always covers the narration.
@@ -167,7 +205,7 @@ export function runPipeline(opts) {
       const {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
-        captionStyle = {}, codeSwitch = false, beatSync = true,
+        captionStyle = {}, codeSwitch = false, beatSync = true, bRoll = true,
       } = opts;
       const orientation = orientationFor(aspect);
       const language = getVoice(voice)?.lang || 'English';
@@ -257,6 +295,20 @@ export function runPipeline(opts) {
       }
       const masterDur = master.duration;
 
+      // 2a. Per-phrase B-roll (#7): split long scenes into short shots so the
+      // picture changes more often. Single-narration path only (bilingual pacing
+      // is bound to its two-read scene structure). Captions are global, so this
+      // only affects which clip shows when. Beat-sync then snaps every shot cut.
+      let visualScenes = plan.scenes;
+      if (!bilingual && bRoll && durations.length) {
+        const exp = expandScenes(plan.scenes, durations, { maxShot: config.maxShotSeconds });
+        visualScenes = exp.scenes;
+        durations = exp.durations;
+        if (visualScenes.length > plan.scenes.length) {
+          emit(job, 'editing', `Cutting ${plan.scenes.length} scenes into ${visualScenes.length} shots…`, 13);
+        }
+      }
+
       // 2b. Background music: explicit upload wins; else auto-fetch from Jamendo.
       // Fetched BEFORE footage so beat-sync can land scene cuts on the music.
       let bgMusic = bgMusicPath || null;
@@ -288,10 +340,12 @@ export function runPipeline(opts) {
       // 3+4. Footage + normalize per scene, with bounded concurrency (overlaps
       // network downloads with GPU encodes). One bad download can't kill the render.
       let done = 0;
+      const vn = visualScenes.length;
       // Shared across every scene of THIS render so no clip is reused — kills the
-      // repeated-footage problem when different scenes' queries overlap.
+      // repeated-footage problem when different scenes' queries overlap (and gives
+      // each B-roll shot of one scene distinct footage → a mini montage).
       const usedClips = new Set();
-      const sceneFiles = await mapLimit(plan.scenes, 3, async (scene, i) => {
+      const sceneFiles = await mapLimit(visualScenes, 3, async (scene, i) => {
         const base = `${id}_s${scene.index}`;
         // Alternate the lead provider scene-to-scene so footage draws from both
         // Pexels and Pixabay instead of always topping out on Pexels.
@@ -300,7 +354,7 @@ export function runPipeline(opts) {
         let acquired = await acquireFootage({
           queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur,
           onAttempt: (q, clip) =>
-            emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / n) * 55)),
+            emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / vn) * 55)),
         });
         if (!acquired) {
           const alts = await suggestAlternativeQueries(scene.query, context);
@@ -317,7 +371,7 @@ export function runPipeline(opts) {
           scene.usedQuery = scene.query;
           scene.provider = 'card';
           done += 1;
-          emit(job, 'editing', `Scene ${scene.index}/${n}: generated card (no footage found)`, 20 + Math.round((done / n) * 55));
+          emit(job, 'editing', `Shot ${scene.index}/${vn}: generated card (no footage found)`, 20 + Math.round((done / vn) * 55));
           return { norm, source: null, card };
         }
         scene.usedQuery = acquired.usedQuery;
@@ -327,7 +381,7 @@ export function runPipeline(opts) {
           input: acquired.path, outBase: base, aspect, targetDur: durations[i], motion, index: i,
         });
         done += 1;
-        emit(job, 'editing', `Scene ${scene.index}/${n} ready (${acquired.clip.provider})`, 20 + Math.round((done / n) * 55));
+        emit(job, 'editing', `Shot ${scene.index}/${vn} ready (${acquired.clip.provider})`, 20 + Math.round((done / vn) * 55));
         // Keep both paths: the normalized clip feeds the concat now, the raw
         // source survives for re-edits (re-trim / re-frame) from the project doc.
         return { norm, source: acquired.path };
@@ -352,7 +406,7 @@ export function runPipeline(opts) {
         voiceTrack: { path: master.audioPath, duration: masterDur },
         captions: { enabled: Boolean(subtitles && captionCues), cues: captionCues || [], style: captionStyle },
         music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta, beat } : null,
-        scenes: plan.scenes.map((sc, i) => ({
+        scenes: visualScenes.map((sc, i) => ({
           index: sc.index, narration: sc.narration, query: sc.query,
           usedQuery: sc.usedQuery, provider: sc.provider,
           sourcePath: sceneFiles[i].source, clipPath: sceneFiles[i].norm,
