@@ -1,5 +1,7 @@
 import fetch from 'node-fetch';
+import fs from 'fs';
 import path from 'path';
+import { spawn } from 'node:child_process';
 import { config } from './config.js';
 import { BROWSER_HEADERS, downloadToFile, pickAgent } from './http.js';
 
@@ -73,6 +75,77 @@ async function searchPixabay(query, orientation) {
   return out;
 }
 
+// A YouTube watch/share URL — used to route downloads through yt-dlp and to
+// recognize a candidate the editor swapped in by hand.
+const YT_URL_RE = /(?:youtube\.com\/(?:watch\?|shorts\/|embed\/)|youtu\.be\/)/i;
+export function isYouTubeUrl(url) {
+  return YT_URL_RE.test(String(url || ''));
+}
+
+// Public thumbnail for a video id — no API key, always reachable.
+function ytThumb(id) {
+  return `https://i.ytimg.com/vi/${id}/hqdefault.jpg`;
+}
+
+/**
+ * Search YouTube via yt-dlp (no API key). Returns candidates shaped like the other
+ * providers but with `provider:'youtube'`, a `thumb` image URL (YouTube can't be
+ * previewed in a bare <video> tag) and the watch-page `url`. Width/height are
+ * unknown from a flat search, so orientation scoring is a no-op for these — fine,
+ * since YouTube is a user-driven extra source, not the auto-pipeline default.
+ *
+ * Resolves to [] if yt-dlp is missing or the search errors, so a YouTube outage
+ * never breaks a search that also has Pexels/Pixabay results.
+ */
+export async function searchYouTube(query, limit = 12) {
+  const q = String(query || '').trim();
+  if (!q) return [];
+  return new Promise((resolve) => {
+    const args = [
+      `ytsearch${limit}:${q}`,
+      '--flat-playlist', '--dump-json',
+      '--no-warnings', '--no-playlist', '--skip-download',
+      '--match-filter', 'duration>3', // skip 0-length live/upcoming entries
+    ];
+    let cp;
+    try {
+      cp = spawn(config.ytDlpBin, args, { stdio: ['ignore', 'pipe', 'ignore'] });
+    } catch {
+      return resolve([]);
+    }
+    let buf = '';
+    let settled = false;
+    const finish = (val) => { if (!settled) { settled = true; resolve(val); } };
+    const killer = setTimeout(() => { try { cp.kill('SIGKILL'); } catch { /* gone */ } finish([]); }, config.youtubeSearchTimeout);
+    cp.stdout.on('data', (d) => { buf += d; });
+    cp.on('error', () => { clearTimeout(killer); finish([]); }); // yt-dlp not installed
+    cp.on('close', () => {
+      clearTimeout(killer);
+      const out = [];
+      for (const line of buf.split('\n')) {
+        const t = line.trim();
+        if (!t) continue;
+        try {
+          const d = JSON.parse(t);
+          if (!d.id) continue;
+          const thumbs = Array.isArray(d.thumbnails) ? d.thumbnails : [];
+          out.push({
+            provider: 'youtube',
+            id: d.id,
+            url: d.url || `https://www.youtube.com/watch?v=${d.id}`,
+            thumb: (thumbs.length && thumbs[thumbs.length - 1].url) || ytThumb(d.id),
+            title: d.title || '',
+            duration: d.duration || 0,
+            width: 0,
+            height: 0,
+          });
+        } catch { /* skip a malformed json line */ }
+      }
+      finish(out);
+    });
+  });
+}
+
 export function scoreCandidate(c, want, minDur = 0) {
   // Prefer correct orientation, a usable clip length, and ~720-1080p (not 4K).
   let score = 0;
@@ -139,15 +212,24 @@ export function interleaveByScore(a, b, orientation, startFromB = false, minDur 
  * `lead` ('pexels' | 'pixabay') picks which provider wins a score tie at the
  * head — rotate it across scenes for genuine source variety. `minDur` biases
  * toward clips long enough to cover the scene without looping.
+ *
+ * `sources` selects which providers to pull. Defaults to the two free-stock APIs;
+ * pass 'youtube' to also include yt-dlp results, which are then merged in after the
+ * stock pool (stock is preferred — short, free, license-clean — and YouTube is the
+ * opt-in extra). The default keeps every existing 4-arg call site unchanged.
  */
-export async function findClipCandidates(query, orientation, lead = 'pexels', minDur = 0) {
-  const [p1, p2] = await Promise.all([
-    searchPexels(query, orientation).catch(() => []),
-    searchPixabay(query, orientation).catch(() => []),
+export async function findClipCandidates(query, orientation, lead = 'pexels', minDur = 0, sources = ['pexels', 'pixabay']) {
+  const want = new Set(sources);
+  const [p1, p2, yt] = await Promise.all([
+    want.has('pexels') ? searchPexels(query, orientation).catch(() => []) : [],
+    want.has('pixabay') ? searchPixabay(query, orientation).catch(() => []) : [],
+    want.has('youtube') ? searchYouTube(query).catch(() => []) : [],
   ]);
   const byScore = (arr) =>
     arr.slice().sort((a, b) => scoreCandidate(b, orientation, minDur) - scoreCandidate(a, orientation, minDur));
-  return interleaveByScore(byScore(p1), byScore(p2), orientation, lead === 'pixabay', minDur);
+  let merged = interleaveByScore(byScore(p1), byScore(p2), orientation, lead === 'pixabay', minDur);
+  if (yt.length) merged = interleaveByScore(merged, byScore(yt), orientation, false, minDur);
+  return merged;
 }
 
 /**
@@ -170,12 +252,59 @@ const MIN_CLIP_BYTES = 16 * 1024;
  * error with a real, non-empty message. On any failure the partial file is removed.
  */
 export async function downloadClip(url, filenameBase) {
+  if (isYouTubeUrl(url)) return downloadYouTube(url, filenameBase);
   const dest = path.join(config.dirs.raw, `${filenameBase}.mp4`);
   return downloadToFile(url, dest, {
     idleTimeout: config.downloadTimeout,
     maxBytes: config.maxClipMb * 1024 * 1024,
     minBytes: MIN_CLIP_BYTES,
     attempts: 3,
+  });
+}
+
+/**
+ * Download a short opening SECTION of a YouTube video as mp4 via yt-dlp. We only
+ * ever use a few seconds of footage and trim later, so pulling just the head keeps
+ * a 30-minute source to a ~2MB download. Caps at 720p (progressive, no muxing),
+ * writes to the raw asset folder, returns the local path. Throws a real message on
+ * failure (missing yt-dlp, geo-block, age-gate, timeout) so the caller can fall
+ * through to the next candidate.
+ */
+export async function downloadYouTube(url, filenameBase) {
+  fs.mkdirSync(config.dirs.raw, { recursive: true });
+  const dest = path.join(config.dirs.raw, `${filenameBase}.mp4`);
+  const sec = Math.max(5, config.youtubeSectionSeconds);
+  const args = [
+    url,
+    '-f', 'b[height<=720][ext=mp4]/bv[height<=720][ext=mp4]+ba/b[ext=mp4]/b',
+    '--download-sections', `*0-${sec}`, '--force-keyframes-at-cuts',
+    '--no-playlist', '--no-warnings', '--no-part',
+    '--merge-output-format', 'mp4',
+    '-o', dest,
+  ];
+  return new Promise((resolve, reject) => {
+    let cp;
+    try {
+      cp = spawn(config.ytDlpBin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    } catch (e) {
+      return reject(new Error(`yt-dlp not available: ${e.message}`));
+    }
+    let err = '';
+    let settled = false;
+    const finish = (fn, val) => { if (!settled) { settled = true; fn(val); } };
+    const killer = setTimeout(() => {
+      try { cp.kill('SIGKILL'); } catch { /* gone */ }
+      finish(reject, new Error('youtube download timed out'));
+    }, config.youtubeDownloadTimeout);
+    cp.stderr.on('data', (d) => { err += d; });
+    cp.on('error', (e) => { clearTimeout(killer); finish(reject, new Error(`yt-dlp not available: ${e.message}`)); });
+    cp.on('close', (code) => {
+      clearTimeout(killer);
+      if (fs.existsSync(dest) && fs.statSync(dest).size > MIN_CLIP_BYTES) return finish(resolve, dest);
+      try { fs.unlinkSync(dest); } catch { /* nothing to clean */ }
+      const last = err.trim().split('\n').filter(Boolean).pop() || `exit ${code}`;
+      finish(reject, new Error(`youtube download failed: ${last}`));
+    });
   });
 }
 
@@ -195,6 +324,22 @@ export function localizeQuery(query, context) {
   const q = String(query || '').trim();
   if (!q || context !== 'africa' || AFRICA_HINT.test(q)) return [q].filter(Boolean);
   return [`${q} Africa`, q];
+}
+
+// Is yt-dlp present? Cached after the first probe — `--version` is cheap and the
+// answer doesn't change during a run. Drives the YouTube toggle in the UI.
+let _ytAvail = null;
+export async function youtubeAvailable() {
+  if (_ytAvail != null) return _ytAvail;
+  _ytAvail = await new Promise((resolve) => {
+    let cp;
+    try { cp = spawn(config.ytDlpBin, ['--version'], { stdio: 'ignore' }); }
+    catch { return resolve(false); }
+    const t = setTimeout(() => { try { cp.kill(); } catch { /* gone */ } resolve(false); }, 4000);
+    cp.on('error', () => { clearTimeout(t); resolve(false); });
+    cp.on('close', (code) => { clearTimeout(t); resolve(code === 0); });
+  });
+  return _ytAvail;
 }
 
 export function orientationFor(aspect) {

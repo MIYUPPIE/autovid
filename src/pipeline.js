@@ -89,12 +89,12 @@ const CANDIDATES_PER_QUERY = 4;
  * `deps` is injectable so this is unit-testable without hitting the network.
  */
 export async function acquireFootage(
-  { queries, orientation, base, onAttempt, used = new Set(), lead = 'pexels', minDur = 0 },
+  { queries, orientation, base, onAttempt, used = new Set(), lead = 'pexels', minDur = 0, sources = ['pexels', 'pixabay'] },
   deps = { findClipCandidates, downloadClip },
 ) {
   for (const q of queries) {
     let candidates = [];
-    try { candidates = await deps.findClipCandidates(q, orientation, lead, minDur); } catch { candidates = []; }
+    try { candidates = await deps.findClipCandidates(q, orientation, lead, minDur, sources); } catch { candidates = []; }
     let attempts = 0;
     for (const clip of candidates) {
       const key = clipKey(clip);
@@ -386,8 +386,11 @@ export function runPipeline(opts) {
         topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
         subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
         captionStyle = {}, codeSwitch = false, beatSync = true, bRoll = true,
-        transition = 'cut',
+        transition = 'cut', useYouTube = false,
       } = opts;
+      // Footage source pool. YouTube is opt-in (slower yt-dlp pull, gray-area
+      // licensing), so it only joins the pool when the creator asks for it.
+      const sources = useYouTube ? ['pexels', 'pixabay', 'youtube'] : ['pexels', 'pixabay'];
       // Crossfade headroom: with transitions on, each scene clip is rendered this
       // much longer so the xfade overlap nets back to the intended cut times.
       const xfadeDur = transition && transition !== 'cut' ? config.transitionSeconds : 0;
@@ -543,13 +546,13 @@ export function runPipeline(opts) {
         const lead = i % 2 === 0 ? 'pexels' : 'pixabay';
         const minDur = durations[i]; // prefer a clip that covers the scene without looping
         let acquired = await acquireFootage({
-          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur,
+          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur, sources,
           onAttempt: (q, clip) =>
             emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / vn) * 55)),
         });
         if (!acquired) {
           const alts = await suggestAlternativeQueries(scene.query, context);
-          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur });
+          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur, sources });
         }
         // Last resort: a branded text card so ONE dead query can never kill the
         // whole render (#6). The card shows a short phrase from the narration.

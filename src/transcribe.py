@@ -6,7 +6,27 @@ Emits JSON on stdout: { "language", "duration", "segments": [{start,end,text}] }
 Kept tiny and deterministic (greedy decode) so the Node side can shell out to it.
 """
 import json
+import os
 import sys
+
+
+def load_model(model_name):
+    """Load a WhisperModel, preferring CPU. device="auto" picks CUDA whenever a
+    GPU is *present* even if its runtime libs (libcublas/libcudnn) can't load —
+    which throws at model-load time and killed every dub/shorts job on CUDA-less
+    boxes. Try GPU only when explicitly asked (WHISPER_DEVICE=cuda) and always
+    fall back to CPU int8, which is fast enough for base/small."""
+    from faster_whisper import WhisperModel
+
+    want_gpu = os.environ.get("WHISPER_DEVICE", "").lower() in ("cuda", "gpu", "auto")
+    attempts = ([("cuda", "float16")] if want_gpu else []) + [("cpu", "int8")]
+    last_err = None
+    for device, compute in attempts:
+        try:
+            return WhisperModel(model_name, device=device, compute_type=compute)
+        except Exception as e:  # noqa: BLE001
+            last_err = e
+    raise last_err or RuntimeError("no whisper device available")
 
 
 def main():
@@ -18,13 +38,18 @@ def main():
     language = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else None
 
     try:
-        from faster_whisper import WhisperModel
+        import faster_whisper  # noqa: F401
     except Exception as e:  # noqa: BLE001
         print(json.dumps({"error": f"faster_whisper not available: {e}"}))
         return 2
 
     try:
-        model = WhisperModel(model_name, device="auto", compute_type="int8")
+        model = load_model(model_name)
+    except Exception as e:  # noqa: BLE001
+        print(json.dumps({"error": f"could not load whisper model: {e}"}))
+        return 2
+
+    try:
         segments, info = model.transcribe(
             media, language=language, beam_size=1, vad_filter=True,
         )

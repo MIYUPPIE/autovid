@@ -13,7 +13,7 @@ import { activeLlm } from './llm.js';
 import { CAPTION_SIZES, CAPTION_ANIMS } from './captions.js';
 import { MEDIA_DIRS, previewBundle, resolveAssetPath } from './edit.js';
 import { extractThumbs, extractWaveform, TRANSITIONS } from './ffmpeg.js';
-import { findClipCandidates, downloadClip, orientationFor } from './stock.js';
+import { findClipCandidates, downloadClip, orientationFor, youtubeAvailable } from './stock.js';
 import { buildShareKit, lanBaseUrl } from './share.js';
 import { loadBrand, saveBrand } from './brand.js';
 
@@ -87,7 +87,10 @@ app.get('/api/health', async (req, res) => {
       jamendo: Boolean(config.jamendoClientId),
       yarn: Boolean(config.yarnKey),
     },
-    features: { dub: await transcriberAvailable() }, // transcription present → dub/shorts enabled
+    features: {
+      dub: await transcriberAvailable(), // transcription present → dub/shorts enabled
+      youtube: await youtubeAvailable(), // yt-dlp present → YouTube footage source
+    },
     llm: activeLlm(),
     model: config.xaiModel,
   });
@@ -123,10 +126,11 @@ function buildRenderOpts(b = {}) {
   const bRoll = b.bRoll !== false;          // split long scenes into short shots (on by default)
   const transition = TRANSITIONS[b.transition] !== undefined ? b.transition : 'cut'; // scene crossfade (#8)
   const bgMusicPath = b.bgMusicPath && fs.existsSync(b.bgMusicPath) ? b.bgMusicPath : null;
+  const useYouTube = Boolean(b.useYouTube); // pull footage from YouTube too (yt-dlp)
 
   return {
     topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll, transition,
+    subtitles, captionStyle, bgMusicPath, fades, motion, autoMusic, codeSwitch, beatSync, bRoll, transition, useYouTube,
   };
 }
 
@@ -307,17 +311,24 @@ app.get('/api/project/:id/waveform', async (req, res) => {
   }
 });
 
-// In-editor stock search: candidate clips for a query, previewable by URL.
+// In-editor stock search: candidate clips for a query, previewable by URL (Pexels
+// /Pixabay) or thumbnail (YouTube). `sources` is a comma list (pexels,pixabay,
+// youtube) — defaults to the two free-stock APIs so the fast inline search stays
+// fast; the browse-all modal passes youtube too. `limit` caps the result count.
+const STOCK_SOURCES = new Set(['pexels', 'pixabay', 'youtube']);
 app.get('/api/stock/search', async (req, res) => {
   const q = (req.query.q || '').toString().trim();
   if (!q) return res.status(400).json({ error: 'q is required' });
   const orientation = orientationFor((req.query.aspect || '16:9').toString());
+  const sources = (req.query.sources || 'pexels,pixabay')
+    .toString().split(',').map((s) => s.trim().toLowerCase()).filter((s) => STOCK_SOURCES.has(s));
+  const limit = Math.max(1, Math.min(40, Number(req.query.limit) || 24));
   try {
-    const all = await findClipCandidates(q, orientation);
+    const all = await findClipCandidates(q, orientation, 'pexels', 0, sources.length ? sources : ['pexels', 'pixabay']);
     res.json({
-      candidates: all.slice(0, 12).map((c) => ({
-        provider: c.provider, id: c.id, url: c.url,
-        width: c.width, height: c.height, duration: c.duration,
+      candidates: all.slice(0, limit).map((c) => ({
+        provider: c.provider, id: c.id, url: c.url, thumb: c.thumb || null,
+        title: c.title || null, width: c.width, height: c.height, duration: c.duration,
       })),
     });
   } catch (err) {
