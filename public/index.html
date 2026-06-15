@@ -177,6 +177,15 @@
   .chips label.on{border-color:transparent;background:var(--grad);color:#1a1206;font-weight:600}
   .chips input{display:none}
 
+  /* collapsible section (keeps a working feature without eating space) */
+  details.collapse{margin:18px 0 8px}
+  details.collapse>summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none;
+    font-size:12px;font-weight:600;letter-spacing:.01em;color:var(--muted);margin:0}
+  details.collapse>summary::-webkit-details-marker{display:none}
+  details.collapse>summary::before{content:'▸';font-size:10px;transition:transform .18s;color:var(--muted)}
+  details.collapse[open]>summary::before{transform:rotate(90deg)}
+  details.collapse[open]>summary{margin-bottom:8px}
+
   /* range slider */
   input[type=range]{-webkit-appearance:none;appearance:none;height:6px;padding:0;border:none;
     border-radius:999px;background:rgba(255,255,255,.1);cursor:pointer;margin-top:4px}
@@ -626,8 +635,10 @@
       <label>Voiceover</label>
       <select id="voice"></select>
 
-      <label style="margin-top:14px">Also make in… <span class="muted">(one idea → many languages)</span></label>
-      <div class="chips" id="multiLang"></div>
+      <details class="collapse">
+        <summary>Also make in… <span class="muted" style="font-weight:400">(one idea → many languages)</span><span class="lenval" id="multiCount" style="display:none"></span></summary>
+        <div class="chips" id="multiLang"></div>
+      </details>
 
       <label>Speaking rate</label>
       <select id="rate">
@@ -958,6 +969,7 @@ function fillMulti(){
   box.querySelectorAll('label').forEach(l=>l.addEventListener('click',()=>{
     const on=l.classList.toggle('on'); const id=l.dataset.id;
     state.multi = on ? [...new Set([...state.multi,id])] : state.multi.filter(x=>x!==id);
+    const c=$('#multiCount'); if(c){c.textContent=state.multi.length+' picked';c.style.display=state.multi.length?'':'none';}
   }));
 }
 function fillVoices(){
