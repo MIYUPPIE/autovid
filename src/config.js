@@ -46,6 +46,17 @@ export const config = {
   yarnTimeoutMs: parseInt(process.env.YARN_TIMEOUT_MS || '180000', 10),
   maxClips: parseInt(process.env.MAX_CLIPS || '12', 10),
   downloadTimeout: parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000', 10),
+
+  // YouTube footage source. No API key needed — we shell out to yt-dlp for both
+  // search (ytsearch) and download. Only a short opening SECTION is pulled per
+  // clip (we trim later anyway) so a 30-minute source stays a ~2MB download.
+  ytDlpBin: process.env.YTDLP_BIN || 'yt-dlp',
+  // Seconds of footage to grab from the head of a YouTube video.
+  youtubeSectionSeconds: parseInt(process.env.YOUTUBE_SECTION_SECONDS || '30', 10),
+  // Hard timeout for one yt-dlp download so a stuck pull can't hang a render.
+  youtubeDownloadTimeout: parseInt(process.env.YOUTUBE_DOWNLOAD_TIMEOUT_MS || '90000', 10),
+  // Timeout for one yt-dlp search.
+  youtubeSearchTimeout: parseInt(process.env.YOUTUBE_SEARCH_TIMEOUT_MS || '25000', 10),
   // Skip clips bigger than this — we only use a few seconds, so a 75MB source is
   // pure download tax. Abort and try the next candidate instead.
   maxClipMb: parseInt(process.env.MAX_CLIP_MB || '35', 10),

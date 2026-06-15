@@ -412,6 +412,29 @@
   .stockcell .tag{position:absolute;left:5px;bottom:5px;font-size:9px;font-weight:700;background:rgba(0,0,0,.6);
     color:#fff;padding:2px 6px;border-radius:5px;font-family:'JetBrains Mono',monospace}
   .stockcell.busy{opacity:.5;pointer-events:none}
+  .stockcell img{width:100%;height:100%;object-fit:cover}
+  .stockcell .play{position:absolute;inset:0;display:grid;place-items:center;color:#fff;
+    font-size:30px;text-shadow:0 2px 8px rgba(0,0,0,.7);pointer-events:none;opacity:.92}
+  .stockcell .ttl{position:absolute;left:0;right:0;bottom:0;font-size:9px;line-height:1.25;
+    background:linear-gradient(transparent,rgba(0,0,0,.82));color:#fff;padding:14px 6px 5px;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* footage gallery — full-size modal so every searched clip is visible */
+  .stockmodal{position:fixed;inset:0;z-index:70;background:rgba(6,6,10,.82);backdrop-filter:blur(12px);
+    display:none;flex-direction:column;padding:max(18px,3vh) max(18px,3vw)}
+  .stockmodal.show{display:flex}
+  .stockmodal .smhead{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+  .stockmodal .smhead h3{margin:0;font-size:18px;font-weight:800}
+  .stockmodal .smbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+  .stockmodal .smbar input[type=text]{flex:1;min-width:200px}
+  .stockmodal .srcchips{display:flex;gap:6px}
+  .stockmodal .srcchips button{font-size:12px;font-weight:700;padding:7px 13px;border-radius:999px;
+    border:1px solid var(--border-2);background:var(--card-2);color:var(--muted);cursor:pointer}
+  .stockmodal .srcchips button.on{background:var(--grad);color:#0a0a0f;border-color:transparent}
+  .stockmodal-grid{flex:1;overflow:auto;display:grid;gap:12px;align-content:start;
+    grid-template-columns:repeat(auto-fill,minmax(220px,1fr))}
+  .stockmodal-grid .stockcell{aspect-ratio:16/9}
+  .stockmodal .smfoot{margin-top:10px;min-height:18px;font-size:12px}
 
   .nle-timeline{flex-shrink:0;border-top:1px solid var(--border);background:rgba(0,0,0,.35);
     display:flex;flex-direction:column;max-height:42vh}
@@ -640,6 +663,8 @@
           <div class="sw" id="sw-cs"><i></i></div></div>
         <div class="tog"><span>🎬 Fade in / out</span>
           <div class="sw on" id="sw-fade"><i></i></div></div>
+        <div class="tog" id="ytTog" style="display:none"><span>▶️ Use YouTube footage too <span class="muted">(in addition to stock)</span></span>
+          <div class="sw" id="sw-yt"><i></i></div></div>
       </div>
 
       <div>
@@ -884,7 +909,7 @@
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
   sub:true,capSize:'M',capAnim:'none',motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null,
-  cs:false,beat:true,transition:'cut',multi:[]};
+  cs:false,beat:true,transition:'cut',yt:false,multi:[]};
 
 // health
 fetch('/api/health').then(r=>r.json()).then(h=>{
@@ -895,7 +920,11 @@ fetch('/api/health').then(r=>r.json()).then(h=>{
   if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Auto-music needs a key configured in .env.';
   // Dub + shorts need transcription (faster-whisper). Reveal when present.
   if(h.features && h.features.dub){ $('#openDub').style.display=''; $('#openShorts').style.display=''; }
+  // YouTube footage needs yt-dlp on the server. Reveal the toggle + modal source when present.
+  ytEnabled = !!(h.features && h.features.youtube);
+  if(ytEnabled){ const yt=$('#ytTog'); if(yt) yt.style.display=''; }
 });
+let ytEnabled=false;
 function pill(n,ok){return `<span class="pill ${ok?'ok':'no'}"><span class="ind"></span>${n}</span>`}
 
 // voices
@@ -958,6 +987,7 @@ seg('#transition','transition');
 tog('#sw-motion','motion');
 tog('#sw-fade','fade');
 tog('#sw-beat','beat');
+tog('#sw-yt','yt');
 tog('#sw-cs','cs');
 tog('#sw-bi','bi',on=>{$('#biRow').style.display=on?'block':'none';});
 tog('#sw-mus','mus',on=>{$('#musRow').style.display=on?'block':'none';});
@@ -1000,7 +1030,7 @@ $('#go').addEventListener('click',async ()=>{
     voice:$('#voice').value,rate:$('#rate').value,
     subtitles:state.sub,captionSize:state.capSize,captionAnim:state.capAnim,
     fades:state.fade,motion:state.motion,beatSync:state.beat,codeSwitch:state.cs,
-    transition:state.transition,
+    transition:state.transition,useYouTube:state.yt,
     autoMusic:state.mus && state.musSrc==='auto',
     bgMusicPath:useUpload?state.bgMusicPath:null};
   if(scriptMode) payload.script=text; else payload.topic=text;
