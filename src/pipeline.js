@@ -1,6 +1,6 @@
 import path from 'path';
 import { nanoid } from 'nanoid';
-import { config } from './config.js';
+import { config, RESOLUTIONS } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
 import { findClipCandidates, downloadClip, orientationFor, clipKey, localizeQuery } from './stock.js';
 import { synthesizeVoice, synthesizeMany } from './voice.js';
@@ -12,6 +12,9 @@ import { normalizeClip, concatSilent, concatWithTransitions, finalizeVideo, asse
 import { buildProject, saveProject, planRender, loadProject } from './project.js';
 import { renderProject } from './render.js';
 import { detectTempo, beatGrid, snapToBeats } from './beats.js';
+import { probeSize, nearestAspect, extractAudio, makeShort } from './ffmpeg.js';
+import { transcribe, transcriptText, highlightWindows, pickTopWindows, windowCues } from './transcribe.js';
+import { translateForDub } from './dub.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
 const GAP_BETWEEN_LANGS = 0.25;
@@ -209,6 +212,156 @@ export function runMultiPipeline(opts) {
     return { voice, language, jobId };
   });
   return { batchId, jobs: jobsOut };
+}
+
+/**
+ * Dub an existing video (#2): transcribe → translate → re-narrate in a target
+ * language, laid over the original footage with karaoke captions. Modeled as a
+ * one-scene project (source = the uploaded video) so it flows through the SAME
+ * incremental render + editor + share path as a generated video. Returns a jobId.
+ */
+export function runDub(opts) {
+  const id = nanoid(10);
+  const job = {
+    id, kind: 'dub', status: 'running', createdAt: Date.now(), opts,
+    log: [], progress: { stage: 'init', message: 'Starting dub', pct: 2 }, result: null, error: null,
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const { videoPath, voice, rate = '+0%', subtitles = true, model = 'base', sourceLang = null } = opts;
+      if (!videoPath || !fs.existsSync(videoPath)) throw new Error('dub: video file not found');
+      const targetLanguage = getVoice(voice)?.lang || 'English';
+      const { w, h } = await probeSize(videoPath);
+      const aspect = RESOLUTIONS[opts.aspect] ? opts.aspect : nearestAspect(w, h);
+
+      // 1. Transcribe the original audio.
+      emit(job, 'transcribe', 'Listening to the original audio…', 8);
+      const audio = await extractAudio({ input: videoPath, outBase: id });
+      const tr = await transcribe(audio, { model, language: sourceLang });
+      const sourceText = transcriptText(tr.segments);
+      if (!sourceText) throw new Error('dub: no speech found in the video');
+      emit(job, 'transcribe', `Heard ${tr.segments.length} lines (${tr.language})`, 28);
+
+      // 2. Translate into the target language.
+      emit(job, 'translate', `Translating into ${targetLanguage}…`, 35);
+      const translated = await translateForDub(sourceText, targetLanguage);
+
+      // 3. Re-narrate the translation in the chosen voice.
+      emit(job, 'voice', `Recording the ${targetLanguage} voiceover…`, 45);
+      const m = await synthesizeVoice({
+        text: translated, voice, rate, outBase: `${id}_vo`,
+        onProgress: (nDone, total) => total > 1 && emit(job, 'voice', `Recording voiceover… (${nDone}/${total})`, 45),
+      });
+
+      // 4. Captions from the new narration's real timing.
+      let captionCues = null;
+      if (subtitles) {
+        const cues = m.cues?.length
+          ? m.cues
+          : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
+        captionCues = cues && cues.length ? cues : null;
+      }
+
+      // 5. One-scene project: the original video fitted to the narration length.
+      emit(job, 'render', 'Laying the new voice over the video…', 60);
+      const project = buildProject({
+        id, opts: { topic: `Dub → ${targetLanguage}`, fades: false, motion: false },
+        plan: { title: `${(tr.language || 'video').toUpperCase()} → ${targetLanguage} dub` },
+        aspect, fps: 30, language: targetLanguage,
+        voiceTrack: { path: m.audioPath, duration: m.duration },
+        captions: { enabled: Boolean(captionCues), cues: captionCues || [], style: opts.captionStyle || {} },
+        music: null,
+        scenes: [{
+          index: 1, narration: translated, query: '',
+          sourcePath: videoPath, clipPath: null, duration: m.duration, motion: false,
+        }],
+      });
+      project.dub = { sourceLanguage: tr.language, targetLanguage, sourceText };
+
+      const out = await renderProject(project, {
+        onProgress: (stage, message) => emit(job, stage, message, RENDER_PCT[stage] ?? job.progress.pct),
+      });
+
+      job.result = {
+        file: path.basename(out.outputPath), path: out.outputPath, projectId: id,
+        title: project.title, language: targetLanguage, dub: true,
+      };
+      job.status = 'done';
+      emit(job, 'done', 'Dub complete', 100);
+    } catch (err) {
+      job.status = 'error';
+      job.error = err.message;
+      emit(job, 'error', err.message, job.progress.pct);
+    }
+  })();
+
+  return id;
+}
+
+/**
+ * Repurpose a long video into shorts (#9): transcribe, pick the strongest
+ * highlight windows, and cut each into a captioned vertical clip (original audio
+ * kept). Returns a jobId; result.shorts lists the cut files. The creator-economy
+ * money feature — one upload → several ready-to-post clips.
+ */
+export function runShorts(opts) {
+  const id = nanoid(10);
+  const job = {
+    id, kind: 'shorts', status: 'running', createdAt: Date.now(), opts,
+    log: [], progress: { stage: 'init', message: 'Starting', pct: 2 }, result: null, error: null,
+  };
+  jobs.set(id, job);
+
+  (async () => {
+    try {
+      const {
+        videoPath, count = 3, aspect = '9:16', subtitles = true, model = 'base',
+        minSec = 15, maxSec = 60, sourceLang = null,
+      } = opts;
+      if (!videoPath || !fs.existsSync(videoPath)) throw new Error('shorts: video file not found');
+      const outAspect = RESOLUTIONS[aspect] ? aspect : '9:16';
+
+      emit(job, 'transcribe', 'Transcribing the video…', 10);
+      const audio = await extractAudio({ input: videoPath, outBase: id });
+      const tr = await transcribe(audio, { model, language: sourceLang });
+      if (!tr.segments.length) throw new Error('shorts: no speech found to clip');
+
+      const windows = pickTopWindows(highlightWindows(tr.segments, { minSec, maxSec }), count);
+      if (!windows.length) throw new Error('shorts: no usable highlight windows');
+      emit(job, 'editing', `Cutting ${windows.length} shorts…`, 35);
+
+      const shorts = [];
+      for (let i = 0; i < windows.length; i++) {
+        const win = windows[i];
+        let captionsPath = null;
+        if (subtitles) {
+          const cues = windowCues(tr.segments, win.start, win.end);
+          if (cues.length) {
+            captionsPath = buildKaraokeAss({
+              cues, aspect: outAspect, assPath: path.join(config.dirs.audio, `${id}_short${i}.ass`),
+              style: opts.captionStyle || {},
+            });
+          }
+        }
+        const outName = `${id}_short${i + 1}.mp4`;
+        const out = await makeShort({ input: videoPath, start: win.start, end: win.end, aspect: outAspect, captions: captionsPath, outName });
+        shorts.push({ file: path.basename(out), path: out, start: win.start, end: win.end, seconds: Math.round(win.end - win.start) });
+        emit(job, 'editing', `Short ${i + 1}/${windows.length} ready`, 35 + Math.round(((i + 1) / windows.length) * 60));
+      }
+
+      job.result = { shorts, count: shorts.length, language: tr.language };
+      job.status = 'done';
+      emit(job, 'done', `Made ${shorts.length} shorts`, 100);
+    } catch (err) {
+      job.status = 'error';
+      job.error = err.message;
+      emit(job, 'error', err.message, job.progress.pct);
+    }
+  })();
+
+  return id;
 }
 
 export function runPipeline(opts) {

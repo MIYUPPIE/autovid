@@ -18,7 +18,9 @@ import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
   captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS,
 } from '../src/captions.js';
-import { buildXfadeGraph, TRANSITIONS } from '../src/ffmpeg.js';
+import { buildXfadeGraph, TRANSITIONS, nearestAspect } from '../src/ffmpeg.js';
+import { transcriptText, highlightWindows, pickTopWindows, windowCues } from '../src/transcribe.js';
+import { buildDubPrompt, cleanDubText } from '../src/dub.js';
 import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
@@ -831,6 +833,71 @@ test('cards: palette cycles by index, honors a brand override, width by aspect',
   assert.ok(cardWrapWidth('9:16') < cardWrapWidth('16:9'), 'portrait wraps sooner');
 });
 
+// ---------- dub + transcription helpers (#2 / #9) ----------
+test('transcribe: transcriptText joins segments and normalizes whitespace', () => {
+  const segs = [{ start: 0, end: 2, text: ' Hello  there ' }, { start: 2, end: 4, text: 'world.' }, { start: 4, end: 5, text: '' }];
+  assert.equal(transcriptText(segs), 'Hello there world.');
+  assert.equal(transcriptText([]), '');
+});
+
+test('transcribe: highlightWindows packs segments into clips within [min,max], breaks on pause', () => {
+  const segs = [
+    { start: 0, end: 8, text: 'a' }, { start: 8, end: 16, text: 'b' },     // → ~16s window
+    { start: 30, end: 40, text: 'c' }, { start: 40, end: 52, text: 'd' },  // big gap before c → new window
+  ];
+  const w = highlightWindows(segs, { minSec: 10, maxSec: 30, gapBreak: 1.2 });
+  assert.ok(w.length >= 2, `splits on the long pause: ${w.length}`);
+  assert.ok(w.every((x) => x.end - x.start <= 30 + 1e-9), 'no window exceeds maxSec');
+  assert.equal(w[0].start, 0);
+  // Each window carries concatenated text.
+  assert.ok(w[0].text.includes('a') && w[0].text.includes('b'));
+});
+
+test('shorts: pickTopWindows takes the longest N, restored to chronological order', () => {
+  const windows = [
+    { start: 0, end: 12, text: 'a' },    // 12s
+    { start: 20, end: 60, text: 'b' },   // 40s (longest)
+    { start: 70, end: 95, text: 'c' },   // 25s
+  ];
+  const top = pickTopWindows(windows, 2);
+  assert.equal(top.length, 2);
+  // The two longest are b (40) and c (25), returned in time order (b before c).
+  assert.deepEqual(top.map((w) => w.start), [20, 70]);
+});
+
+test('shorts: windowCues clips + retimes captions to the window start', () => {
+  const segs = [
+    { start: 5, end: 8, text: 'before' },
+    { start: 22, end: 25, text: 'inside one' },
+    { start: 25, end: 28, text: 'inside two' },
+    { start: 65, end: 70, text: 'after' },
+  ];
+  const cues = windowCues(segs, 20, 30);
+  assert.equal(cues.length, 2, 'only segments overlapping [20,30]');
+  assert.equal(cues[0].start, 2, '22-20 → 2s into the window');
+  assert.equal(cues[0].text, 'inside one');
+  assert.ok(cues.every((c) => c.end > c.start && c.start >= 0));
+});
+
+test('dub: buildDubPrompt targets the language and reuses its TTS rules; cleanDubText strips wrappers', () => {
+  const { system, user } = buildDubPrompt('Hello world', 'Yoruba');
+  assert.match(system, /Yoruba/);
+  assert.match(system, /Avoid English\/Latin loanwords/i, 'reuses languageNote rules');
+  assert.match(user, /Hello world/);
+  // Pidgin keeps code-switching in the dub prompt too.
+  assert.ok(!/Avoid English\/Latin loanwords/i.test(buildDubPrompt('hi', 'Nigerian Pidgin').system));
+  // Output cleaner removes fences, quotes and a leading label.
+  assert.equal(cleanDubText('```\n"Báwo ni"\n```'), 'Báwo ni');
+  assert.equal(cleanDubText('Translation: Ndewo'), 'Ndewo');
+});
+
+test('ffmpeg: nearestAspect maps dimensions to the closest preset', () => {
+  assert.equal(nearestAspect(1920, 1080), '16:9');
+  assert.equal(nearestAspect(1080, 1920), '9:16');
+  assert.equal(nearestAspect(1080, 1080), '1:1');
+  assert.equal(nearestAspect(0, 0), '16:9'); // unknown → safe default
+});
+
 // ---------- transitions + caption animations (#8) ----------
 test('captions: captionAnimTag returns an ASS override per preset, empty otherwise', () => {
   assert.equal(captionAnimTag({}), '');
@@ -969,6 +1036,35 @@ test('http: POST /api/render/multi returns a batch of string jobIds', async () =
   } finally {
     config.xaiKey = savedKey;
   }
+});
+
+test('http: POST /api/dub validates videoPath and voice before doing any work', async () => {
+  await withServer(async (base) => {
+    // Missing videoPath → 400.
+    const noPath = await fetch(`${base}/api/dub`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice: 'yarn-yor-f' }),
+    });
+    assert.equal(noPath.status, 400);
+    // Real file but bad voice → 400 (voice checked before the heavy transcription path).
+    const tmp = path.join(os.tmpdir(), `av_dub_${Date.now()}.mp4`);
+    fs.writeFileSync(tmp, 'x');
+    const badVoice = await fetch(`${base}/api/dub`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoPath: tmp, voice: 'not-a-voice' }),
+    });
+    fs.unlinkSync(tmp);
+    assert.equal(badVoice.status, 400);
+  });
+});
+
+test('http: POST /api/shorts requires a real videoPath', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/shorts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ count: 3 }),
+    });
+    assert.equal(res.status, 400);
+    assert.ok((await res.json()).error);
+  });
 });
 
 // ---------- editable project endpoints ----------
