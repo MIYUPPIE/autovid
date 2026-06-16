@@ -1481,6 +1481,48 @@ test('http: POST scene/:index/source validates url and project', async () => {
   });
 });
 
+test('http: scene source swap returns the new path and persists it (footage retained)', async () => {
+  // Regression: the editor swapped footage via this endpoint but the client never
+  // learned the new source.path, so its next PUT clobbered the swap with the stale
+  // path → "footage doesn't retain during edit". The endpoint must return the
+  // absolute path so the client can persist it, AND the swap must survive in the
+  // saved doc with the cached normalized clip + trim cleared so it re-encodes.
+  saveProject(sampleProject('swapret'));
+  const savedRaw = config.dirs.raw;
+  config.dirs.raw = fs.mkdtempSync(path.join(os.tmpdir(), 'av_swap_raw_'));
+  const body = Buffer.alloc(32 * 1024, 1); // > MIN_CLIP_BYTES so it's treated as a real clip
+  const origin = http.createServer((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'video/mp4', 'Content-Length': body.length });
+    res.end(body);
+  });
+  await new Promise((r) => origin.listen(0, r));
+  const clipUrl = `http://127.0.0.1:${origin.address().port}/clip.mp4`;
+  try {
+    await withServer(async (base) => {
+      const res = await fetch(`${base}/api/project/swapret/scene/1/source`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: clipUrl }),
+      });
+      assert.equal(res.status, 200);
+      const d = await res.json();
+      // The fix: the response carries the absolute path the client must persist.
+      assert.equal(typeof d.scene.path, 'string', 'swap response must return the new source path');
+      assert.ok(d.scene.path.startsWith(config.dirs.raw), 'downloaded into the raw asset dir');
+      assert.ok(fs.existsSync(d.scene.path), 'the swapped clip is on disk');
+      assert.ok(d.scene.sourceUrl.startsWith('/media/raw/'));
+      // And the server persisted the swap: the saved doc points scene 1 at the new clip.
+      const doc = await (await fetch(`${base}/api/project/swapret`)).json();
+      const sc = doc.scenes.find((s) => s.index === 1);
+      assert.equal(sc.source.path, d.scene.path, 'saved scene points at the swapped clip');
+      assert.equal(sc.clip.path, null, 'cached normalized clip cleared so it re-renders');
+      assert.equal(sc.trim, null);
+    });
+  } finally {
+    await new Promise((r) => origin.close(r));
+    fs.rmSync(config.dirs.raw, { recursive: true, force: true });
+    config.dirs.raw = savedRaw;
+  }
+});
+
 test('http: thumbs/waveform are 404 for an unknown project (no ffmpeg needed)', async () => {
   await withServer(async (base) => {
     assert.equal((await fetch(`${base}/api/project/nope/thumbs/0`)).status, 404);

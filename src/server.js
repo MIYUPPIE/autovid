@@ -352,7 +352,9 @@ app.post('/api/project/:id/scene/:index/source', async (req, res) => {
     scene.clip = { path: null };
     scene.trim = null;
     saveProject(p);
-    res.json({ ok: true, scene: { index: scene.index, sourceUrl: `/media/raw/${encodeURIComponent(path.basename(dest))}` } });
+    // Return the absolute `path` too: the editor stores it on its working copy so
+    // its next PUT keeps the swap instead of overwriting it with the stale path.
+    res.json({ ok: true, scene: { index: scene.index, path: dest, sourceUrl: `/media/raw/${encodeURIComponent(path.basename(dest))}` } });
   } catch (err) {
     res.status(502).json({ error: `download failed: ${err.message}` });
   }
