@@ -6,7 +6,10 @@ import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
 import { ensureDirs, probeDuration } from './voice.js';
-import { runPipeline, runMultiPipeline, runDub, runShorts, getJob, startProjectRender } from './pipeline.js';
+import {
+  submitRender, submitMulti, submitDub, submitShorts, submitProjectRender,
+  jobView, queueEnabled, activeBackend, startWorker,
+} from './jobs.js';
 import { transcriberAvailable } from './transcribe.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects, hashOf } from './project.js';
 import { activeLlm } from './llm.js';
@@ -93,6 +96,7 @@ app.get('/api/health', async (req, res) => {
     },
     llm: activeLlm(),
     model: config.xaiModel,
+    queue: { enabled: queueEnabled(), backend: activeBackend() },
   });
 });
 
@@ -135,11 +139,12 @@ function buildRenderOpts(b = {}) {
 }
 
 // --- Start a render ---
-app.post('/api/render', (req, res) => {
+app.post('/api/render', async (req, res) => {
   let opts;
   try { opts = buildRenderOpts(req.body); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
-  res.json({ jobId: runPipeline(opts) });
+  try { res.json({ jobId: await submitRender(opts) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- Dub an existing video (#2): transcribe → translate → re-narrate ---
@@ -156,12 +161,14 @@ app.post('/api/dub', async (req, res) => {
   const captionStyle = {};
   if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
   if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
-  const jobId = runDub({
-    videoPath, voice: b.voice, rate: (b.rate || '+0%').toString(),
-    subtitles: b.subtitles !== false, aspect: b.aspect, captionStyle,
-    sourceLang: b.sourceLang || null, model: (b.model || 'base').toString(),
-  });
-  res.json({ jobId });
+  try {
+    const jobId = await submitDub({
+      videoPath, voice: b.voice, rate: (b.rate || '+0%').toString(),
+      subtitles: b.subtitles !== false, aspect: b.aspect, captionStyle,
+      sourceLang: b.sourceLang || null, model: (b.model || 'base').toString(),
+    });
+    res.json({ jobId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- Repurpose a long video into shorts (#9) ---
@@ -177,24 +184,26 @@ app.post('/api/shorts', async (req, res) => {
   const captionStyle = {};
   if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
   if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
-  const jobId = runShorts({
-    videoPath, count: Math.max(1, Math.min(10, Number(b.count) || 3)),
-    aspect: RESOLUTIONS[b.aspect] ? b.aspect : '9:16',
-    subtitles: b.subtitles !== false, captionStyle,
-    minSec: Math.max(5, Number(b.minSec) || 15), maxSec: Math.max(15, Number(b.maxSec) || 60),
-    model: (b.model || 'base').toString(), sourceLang: b.sourceLang || null,
-  });
-  res.json({ jobId });
+  try {
+    const jobId = await submitShorts({
+      videoPath, count: Math.max(1, Math.min(10, Number(b.count) || 3)),
+      aspect: RESOLUTIONS[b.aspect] ? b.aspect : '9:16',
+      subtitles: b.subtitles !== false, captionStyle,
+      minSec: Math.max(5, Number(b.minSec) || 15), maxSec: Math.max(15, Number(b.maxSec) || 60),
+      model: (b.model || 'base').toString(), sourceLang: b.sourceLang || null,
+    });
+    res.json({ jobId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // --- Multi-language one-shot (#1): one idea → N narrated videos at once ---
-app.post('/api/render/multi', (req, res) => {
+app.post('/api/render/multi', async (req, res) => {
   let opts;
   try { opts = buildRenderOpts(req.body); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
   const voices = Array.isArray(req.body?.voices) ? req.body.voices.filter(isValidVoice) : [];
   try {
-    const batch = runMultiPipeline({ ...opts, voices });
+    const batch = await submitMulti({ ...opts, voices });
     res.json(batch);
   } catch (e) {
     res.status(400).json({ error: e.message });
@@ -234,10 +243,12 @@ app.put('/api/project/:id', (req, res) => {
 });
 
 // Kick off an incremental re-render. Poll progress via /api/job/:id (same as renders).
-app.post('/api/project/:id/render', (req, res) => {
-  const jobId = startProjectRender(req.params.id);
-  if (!jobId) return res.status(404).json({ error: 'not found' });
-  res.json({ jobId });
+app.post('/api/project/:id/render', async (req, res) => {
+  try {
+    const jobId = await submitProjectRender(req.params.id);
+    if (!jobId) return res.status(404).json({ error: 'not found' });
+    res.json({ jobId });
+  } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Share kit: caption + hashtags + per-platform composer links for a rendered
@@ -361,8 +372,8 @@ app.post('/api/project/:id/scene/:index/source', async (req, res) => {
 });
 
 // --- Poll job status ---
-app.get('/api/job/:id', (req, res) => {
-  const job = getJob(req.params.id);
+app.get('/api/job/:id', async (req, res) => {
+  const job = await jobView(req.params.id);
   if (!job) return res.status(404).json({ error: 'not found' });
   res.json({
     id: job.id,
@@ -375,28 +386,38 @@ app.get('/api/job/:id', (req, res) => {
 });
 
 // --- SSE progress stream ---
-app.get('/api/job/:id/stream', (req, res) => {
-  const job = getJob(req.params.id);
-  if (!job) return res.status(404).end();
+// Polls jobView on an interval so the exact same wire format works for both
+// backends: in-memory reads the live object; Redis reads BullMQ's persisted
+// progress. Each `data:` frame carries one new log entry + current progress +
+// status; an `end` event carries the final result/error.
+app.get('/api/job/:id/stream', async (req, res) => {
+  if (!(await jobView(req.params.id))) return res.status(404).end();
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
   let lastIdx = 0;
-  const tick = setInterval(() => {
-    while (lastIdx < job.log.length) {
-      const entry = job.log[lastIdx++];
-      res.write(`data: ${JSON.stringify({ ...entry, progress: job.progress, status: job.status })}\n\n`);
-    }
-    if (job.status === 'done' || job.status === 'error') {
-      res.write(`event: end\ndata: ${JSON.stringify({ status: job.status, result: job.result, error: job.error })}\n\n`);
-      clearInterval(tick);
-      res.end();
-    }
-  }, 400);
+  let closed = false;
+  req.on('close', () => { closed = true; });
 
-  req.on('close', () => clearInterval(tick));
+  async function tick() {
+    if (closed) return;
+    let job = null;
+    try { job = await jobView(req.params.id); } catch { /* transient redis read */ }
+    if (job) {
+      while (lastIdx < job.log.length) {
+        const entry = job.log[lastIdx++];
+        res.write(`data: ${JSON.stringify({ ...entry, progress: job.progress, status: job.status })}\n\n`);
+      }
+      if (job.status === 'done' || job.status === 'error') {
+        res.write(`event: end\ndata: ${JSON.stringify({ status: job.status, result: job.result, error: job.error })}\n\n`);
+        return res.end();
+      }
+    }
+    setTimeout(tick, config.jobPollMs);
+  }
+  tick();
 });
 
 export { app };
@@ -404,9 +425,22 @@ export { app };
 // Only listen when run directly (node src/server.js), not when imported by tests.
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
+  // Job backend. With Redis on, run a worker inside this process too
+  // (single-box convenience) unless WORKER_INLINE=0, in which case the web
+  // server only enqueues and a separate `npm run worker` does the work.
+  let backendLine = '  Queue: in-memory (jobs lost on restart)';
+  if (queueEnabled()) {
+    if (config.workerInline) {
+      startWorker();
+      backendLine = `  Queue: redis @ ${config.redisUrl} (inline worker, concurrency=${config.workerConcurrency})`;
+    } else {
+      backendLine = `  Queue: redis @ ${config.redisUrl} (enqueue-only — run \`npm run worker\`)`;
+    }
+  }
   app.listen(config.port, () => {
     console.log(`\n  GriotVid running →  http://localhost:${config.port}`);
     console.log(`  Keys: xai=${Boolean(config.xaiKey)} pexels=${Boolean(config.pexelsKey)} pixabay=${Boolean(config.pixabayKey)}`);
-    console.log(`  Model: ${config.xaiModel}\n`);
+    console.log(`  Model: ${config.xaiModel}`);
+    console.log(`${backendLine}\n`);
   });
 }
