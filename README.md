@@ -50,7 +50,7 @@ Two lanes:
 npm test      # gate tests — offline, deterministic, free, <1s. No network/LLM/ffmpeg.
 npm run eval  # quality eval — real Grok calls, measures plan quality (needs XAI_API_KEY)
 ```
-`npm test` exercises voice/engine routing, stock ranking (incl. the size/duration penalties that keep downloads fast), the flowing-narration helpers (script folding, proportional durations + SRT), Jamendo tone→tag mapping, footage-fallback resilience, the HTTP contract, and regression guards (string `jobId`; a bad download skipping to the next candidate). `npm run eval` scores Grok's scene plans across topics/contexts/languages (incl. a Yorùbá case verifying native script with English queries) against an 85% pass threshold.
+`npm test` exercises voice/engine routing, stock ranking (size/duration penalties that keep downloads fast, equal-use provider round-robin incl. YouTube, in-tier shuffle for variety, and cross-render clip history that stops the same footage repeating render-to-render), the flowing-narration helpers (script folding, proportional durations + SRT), Jamendo tone→tag mapping, footage-fallback resilience, the HTTP contract, and regression guards (string `jobId`; a bad download skipping to the next candidate). `npm run eval` scores Grok's scene plans across topics/contexts/languages (incl. a Yorùbá case verifying native script with English queries) against an 85% pass threshold.
 
 ## LLM provider (scriptwriting / planning)
 Grok is only the creative brain — it writes the script + scene plan and the English footage queries, nothing else. It's plain chat-completions returning JSON, so it's swappable. Set `LLM_PROVIDER` in `.env`:
@@ -69,7 +69,7 @@ The active provider shows in `/api/health` and the UI header.
 
 ## YouTube footage (no key)
 Install `yt-dlp` (`pip install yt-dlp`) and the app gains a third footage source — no API key. When detected:
-- **Create form** shows a "▶️ Use YouTube footage too" toggle. On → the auto-pipeline can pull scene footage from YouTube as well as Pexels/Pixabay (stock is still preferred; YouTube is the opt-in extra).
+- **Create form** shows a "▶️ Use YouTube footage too" toggle. On → the auto-pipeline pulls scene footage from YouTube *equally* alongside Pexels/Pixabay: providers are round-robined (each gets an equal turn at the head of the candidate list) and the lead source rotates scene-to-scene, so footage isn't all one source. YouTube stays opt-in only because its pull is slower and licensing is gray-area.
 - **Editor → Replace footage → "⛶ Browse all clips"** opens a full-size gallery with **Pexels / Pixabay / YouTube** tabs so you can see every searched clip and click one to swap it onto the selected scene.
 
 Only a short opening section of each YouTube video is downloaded (`YOUTUBE_SECTION_SECONDS`, default 30s) and trimmed to the scene, so a 30-minute source is a ~2MB pull. Mind copyright/licensing on whatever you reuse.

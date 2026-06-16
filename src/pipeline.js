@@ -3,6 +3,7 @@ import { nanoid } from 'nanoid';
 import { config, RESOLUTIONS } from './config.js';
 import { generateVideoPlan, generateBilingualPlan, planFromScript, planBilingualFromScript, suggestAlternativeQueries } from './xai.js';
 import { findClipCandidates, downloadClip, orientationFor, clipKey, localizeQuery } from './stock.js';
+import { loadRecentClips, recordUsedClips } from './clip-history.js';
 import { synthesizeVoice, synthesizeMany } from './voice.js';
 import { buildKaraokeAss, parseSrt, hexToAss } from './captions.js';
 import { getVoice } from './voices.js';
@@ -87,15 +88,17 @@ const CANDIDATES_PER_QUERY = 4;
  * claimed the moment it's selected (before the await) so concurrent scenes don't
  * race onto the same one. Defaults to a fresh per-call Set for standalone use.
  *
- * `deps` is injectable so this is unit-testable without hitting the network.
+ * `recent` is a Set of clip keys used by PAST renders; it's forwarded to the
+ * ranker, which floats those clips to the back so footage isn't repeated render to
+ * render. `deps` is injectable so this is unit-testable without hitting the network.
  */
 export async function acquireFootage(
-  { queries, orientation, base, onAttempt, used = new Set(), lead = 'pexels', minDur = 0, sources = ['pexels', 'pixabay'] },
+  { queries, orientation, base, onAttempt, used = new Set(), lead = 'pexels', minDur = 0, sources = ['pexels', 'pixabay'], recent = new Set() },
   deps = { findClipCandidates, downloadClip },
 ) {
   for (const q of queries) {
     let candidates = [];
-    try { candidates = await deps.findClipCandidates(q, orientation, lead, minDur, sources); } catch { candidates = []; }
+    try { candidates = await deps.findClipCandidates(q, orientation, lead, minDur, sources, { recent }); } catch { candidates = []; }
     let attempts = 0;
     for (const clip of candidates) {
       const key = clipKey(clip);
@@ -555,20 +558,25 @@ export function runPipeline(opts) {
       // repeated-footage problem when different scenes' queries overlap (and gives
       // each B-roll shot of one scene distinct footage → a mini montage).
       const usedClips = new Set();
+      // Clips used by PAST renders, so the ranker can avoid repeating footage across
+      // renders too; the keys actually used here are appended back at the end.
+      const recentClips = loadRecentClips();
+      const renderedKeys = [];
       const sceneFiles = await mapLimit(visualScenes, 3, async (scene, i) => {
         const base = `${id}_s${scene.index}`;
-        // Alternate the lead provider scene-to-scene so footage draws from both
-        // Pexels and Pixabay instead of always topping out on Pexels.
-        const lead = i % 2 === 0 ? 'pexels' : 'pixabay';
+        // Rotate the lead provider scene-to-scene across EVERY enabled source so
+        // footage draws equally from Pexels, Pixabay and (when on) YouTube instead
+        // of always topping out on Pexels.
+        const lead = sources[i % sources.length];
         const minDur = durations[i]; // prefer a clip that covers the scene without looping
         let acquired = await acquireFootage({
-          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur, sources,
+          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips,
           onAttempt: (q, clip) =>
             emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / vn) * 55)),
         });
         if (!acquired) {
           const alts = await suggestAlternativeQueries(scene.query, context);
-          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur, sources });
+          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips });
         }
         // Last resort: a branded text card so ONE dead query can never kill the
         // whole render (#6). The card shows a short phrase from the narration.
@@ -586,6 +594,7 @@ export function runPipeline(opts) {
         }
         scene.usedQuery = acquired.usedQuery;
         scene.provider = acquired.clip.provider;
+        renderedKeys.push(clipKey(acquired.clip)); // remember it so later renders pick fresh footage
 
         const norm = await normalizeClip({
           input: acquired.path, outBase: base, aspect, targetDur: durations[i] + xfadeDur, motion, index: i,
@@ -596,6 +605,8 @@ export function runPipeline(opts) {
         // source survives for re-edits (re-trim / re-frame) from the project doc.
         return { norm, source: acquired.path };
       });
+      // Persist the clips this render used so the next render avoids repeating them.
+      recordUsedClips(renderedKeys);
 
       // 4b. Brand intro/outro bookends (#10): branded cards before/after the
       // content, with the voice timeline padded by matching silence so everything
