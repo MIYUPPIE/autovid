@@ -1951,7 +1951,7 @@ async function applyStock(url,cell,statusEl){
   try{
     const r=await fetch(`/api/project/${proj.id}/scene/${s.index}/source`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({url})});
     const d=await r.json();
-    if(r.ok&&d.scene){ applyNewSource(null,d.scene.sourceUrl); st.textContent='✓ Footage replaced (re-encodes on render)'; closeStockModal(); }
+    if(r.ok&&d.scene){ applyNewSource(d.scene.path,d.scene.sourceUrl); st.textContent='✓ Footage replaced (re-encodes on render)'; closeStockModal(); }
     else st.textContent=d.error||'Swap failed';
   }catch(e){ st.textContent='Swap failed'; }
   cell.classList.remove('busy');
@@ -2003,12 +2003,13 @@ function renderModalGrid(list){
   wireStockCells(grid,list,foot);
   foot.textContent=`${list.length} clip${list.length===1?'':'s'} — hover to preview, click to use`;
 }
-// Point the selected scene at a new source. `path` updates proj for save; `url` for live preview.
-// For stock swaps the server already saved source.path, so we reload the doc on next save anyway;
-// here we just need the preview to show it now and mark the cache stale.
+// Point the selected scene at a new source. `path` updates proj so the swap is kept
+// on the next PUT; `url` is the browser-playable preview. Both upload and stock/YouTube
+// swaps now pass the real path (the server returns it), so the working copy never
+// reverts to the old footage on save.
 function applyNewSource(path,url){
   const s=sel.type==='scene'?proj.scenes.find(x=>x.index===sel.id):null; if(!s)return;
-  if(path) s.source={path}; // upload case: client knows the path
+  if(path) s.source={path}; // keep the new source path so save/re-render uses it
   s.clip={path:null}; s.trim=null; s._thumbs=null; s._url=url; s._swapped=true;
   const v=sceneVideos[s.index]; if(v){ v.src=url; v.load(); }
   buildTimeline(); renderInspector(); frame();
