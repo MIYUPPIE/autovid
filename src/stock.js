@@ -182,54 +182,104 @@ export function clipKey(c) {
   return c && c.id != null ? `${c.provider}:${c.id}` : c?.url;
 }
 
-// Merge two score-sorted lists, alternating provider on score ties. Without this
-// a stable concat ([...pexels, ...pixabay]) keeps every tied Pexels clip ahead of
-// every Pixabay clip, so with a small per-query attempt budget Pixabay is never
-// reached. Alternating on ties keeps the ranking but balances the providers.
-// `startFromB` flips which provider wins a score tie at the head of the list, so
-// callers can rotate the lead provider across scenes and actually use both
-// sources instead of always leading with Pexels.
-export function interleaveByScore(a, b, orientation, startFromB = false, minDur = 0) {
+// Fisher-Yates shuffle using an injectable RNG (so tests are deterministic and
+// production gets real variety). Returns a NEW array; the input is untouched.
+export function shuffle(arr, rng = Math.random) {
+  const a = (arr || []).slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+/**
+ * Rank ONE provider's candidates for selection. Best-first by score, with two
+ * deliberate twists that fix the "same clip every render" complaint:
+ *   1. Clips are grouped into equal-score TIERS and shuffled within each tier, so
+ *      the same query doesn't always return the same top clip — variety with no
+ *      quality loss (a tier's clips are equally good by our scoring).
+ *   2. `recent` (clip keys used by previous renders) floats matching clips to the
+ *      BACK. Soft, not hard: a recently-used clip is still available if the fresh
+ *      pool runs dry, so we never regress to a text card just to avoid a repeat.
+ *      This is what stops Pexels/Pixabay handing back the same footage every time
+ *      you generate a similar topic.
+ */
+export function rankProvider(arr, orientation, minDur = 0, { rng = Math.random, recent = new Set() } = {}) {
+  const groups = new Map(); // `${fresh}:${score}` -> [clips]
+  for (const c of arr || []) {
+    const fresh = recent.has(clipKey(c)) ? 0 : 1;
+    const key = `${fresh}:${scoreCandidate(c, orientation, minDur)}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(c);
+  }
+  const order = [...groups.keys()].sort((x, y) => {
+    const [fx, sx] = x.split(':').map(Number);
+    const [fy, sy] = y.split(':').map(Number);
+    return fy - fx || sy - sx; // fresh before recent, then higher score first
+  });
   const out = [];
-  let i = 0, j = 0, lastFromA = startFromB;
-  while (i < a.length || j < b.length) {
-    if (j >= b.length) { out.push(a[i++]); continue; }
-    if (i >= a.length) { out.push(b[j++]); continue; }
-    const sa = scoreCandidate(a[i], orientation, minDur);
-    const sb = scoreCandidate(b[j], orientation, minDur);
-    if (sa > sb) { out.push(a[i++]); lastFromA = true; }
-    else if (sb > sa) { out.push(b[j++]); lastFromA = false; }
-    else if (lastFromA) { out.push(b[j++]); lastFromA = false; }
-    else { out.push(a[i++]); lastFromA = true; }
+  for (const k of order) out.push(...shuffle(groups.get(k), rng));
+  return out;
+}
+
+/**
+ * Round-robin merge across providers so every source is used EQUALLY at the head
+ * of the list, regardless of absolute score. YouTube clips carry no width/height
+ * from a flat search, so under the old score-merge they always ranked below shaped
+ * stock and were never reached within the per-query attempt budget — round-robin
+ * gives each enabled source an equal turn. `start` rotates which provider goes
+ * first so callers can vary the lead per scene. Each list is assumed already
+ * ranked (see rankProvider); empty providers are skipped.
+ */
+export function roundRobin(lists, start = 0) {
+  const ls = (lists || []).filter((l) => l && l.length);
+  if (!ls.length) return [];
+  const n = ls.length;
+  const s = ((start % n) + n) % n;
+  const max = Math.max(...ls.map((l) => l.length));
+  const out = [];
+  for (let r = 0; r < max; r++) {
+    for (let k = 0; k < n; k++) {
+      const list = ls[(s + k) % n];
+      if (r < list.length) out.push(list[r]);
+    }
   }
   return out;
 }
 
 /**
- * Return ALL candidate clips for a query, ranked best-first and provider-balanced
- * (Pexels + Pixabay interleaved). The pipeline tries them in order so one
- * bad/slow download can't kill a render, and so footage isn't all one source.
- * `lead` ('pexels' | 'pixabay') picks which provider wins a score tie at the
- * head — rotate it across scenes for genuine source variety. `minDur` biases
- * toward clips long enough to cover the scene without looping.
+ * Return ALL candidate clips for a query, ranked best-first WITHIN each provider
+ * and round-robined ACROSS providers so Pexels, Pixabay and YouTube are used
+ * equally (not always topped out on Pexels). The pipeline tries them in order so
+ * one bad/slow download can't kill a render. `lead` names the provider that goes
+ * first in the round-robin — rotate it across scenes for source variety. `minDur`
+ * biases toward clips long enough to cover the scene without looping.
  *
- * `sources` selects which providers to pull. Defaults to the two free-stock APIs;
- * pass 'youtube' to also include yt-dlp results, which are then merged in after the
- * stock pool (stock is preferred — short, free, license-clean — and YouTube is the
- * opt-in extra). The default keeps every existing 4-arg call site unchanged.
+ * `sources` selects which providers to pull (default: the two free-stock APIs; add
+ * 'youtube' for yt-dlp results). `opts.rng` injects an RNG for deterministic tests;
+ * `opts.recent` is a Set of clip keys from past renders, floated to the back so
+ * footage isn't repeated render-to-render. The 5-arg call sites stay unchanged.
  */
-export async function findClipCandidates(query, orientation, lead = 'pexels', minDur = 0, sources = ['pexels', 'pixabay']) {
+export async function findClipCandidates(
+  query, orientation, lead = 'pexels', minDur = 0,
+  sources = ['pexels', 'pixabay'], { rng = Math.random, recent = new Set() } = {},
+) {
   const want = new Set(sources);
   const [p1, p2, yt] = await Promise.all([
     want.has('pexels') ? searchPexels(query, orientation).catch(() => []) : [],
     want.has('pixabay') ? searchPixabay(query, orientation).catch(() => []) : [],
     want.has('youtube') ? searchYouTube(query).catch(() => []) : [],
   ]);
-  const byScore = (arr) =>
-    arr.slice().sort((a, b) => scoreCandidate(b, orientation, minDur) - scoreCandidate(a, orientation, minDur));
-  let merged = interleaveByScore(byScore(p1), byScore(p2), orientation, lead === 'pixabay', minDur);
-  if (yt.length) merged = interleaveByScore(merged, byScore(yt), orientation, false, minDur);
-  return merged;
+  const ranked = {
+    pexels: rankProvider(p1, orientation, minDur, { rng, recent }),
+    pixabay: rankProvider(p2, orientation, minDur, { rng, recent }),
+    youtube: rankProvider(yt, orientation, minDur, { rng, recent }),
+  };
+  // Keep the caller's source order, drop empty providers, rotate so `lead` is first.
+  const order = sources.filter((s) => ranked[s] && ranked[s].length);
+  const start = Math.max(0, order.indexOf(lead));
+  return roundRobin(order.map((s) => ranked[s]), start);
 }
 
 /**

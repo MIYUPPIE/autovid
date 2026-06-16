@@ -9,7 +9,8 @@ import path from 'node:path';
 
 import { config, RESOLUTIONS } from '../src/config.js';
 import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES, edgeVoiceName } from '../src/voices.js';
-import { orientationFor, scoreCandidate, interleaveByScore, clipKey, localizeQuery, isYouTubeUrl } from '../src/stock.js';
+import { orientationFor, scoreCandidate, clipKey, localizeQuery, isYouTubeUrl, shuffle, rankProvider, roundRobin } from '../src/stock.js';
+import { loadRecentClips, recordUsedClips, clearClipHistory, MAX_HISTORY } from '../src/clip-history.js';
 import { parseJsonLoose, splitScriptIntoScenes, languageNote } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
@@ -619,25 +620,68 @@ test('stock: clipKey is stable on provider+id, falls back to url', () => {
   assert.equal(clipKey({ provider: 'pixabay', url: 'y' }), 'y'); // no id
 });
 
-test('stock: equal-scored providers interleave so Pixabay is reachable', () => {
-  // Real bug: [...pexels, ...pixabay] stable-sorted kept all 15 tied Pexels clips
-  // ahead of every Pixabay clip; with a 4-attempt budget Pixabay was never tried.
-  const mk = (provider, n) => Array.from({ length: n }, (_, i) =>
-    ({ url: `${provider}${i}`, provider, width: 1920, height: 1080, duration: 8 }));
-  const ranked = interleaveByScore(mk('pexels', 8), mk('pixabay', 8), 'landscape');
-  assert.ok(
-    ranked.slice(0, 4).some((c) => c.provider === 'pixabay'),
-    'a Pixabay clip must appear within the per-query attempt budget',
-  );
-  // Higher score still wins over interleaving.
-  const better = { url: 'pb', provider: 'pixabay', width: 1920, height: 1080, duration: 8 };
-  const worse = { url: 'px', provider: 'pexels', width: 1920, height: 1080, duration: 50 };
-  assert.equal(interleaveByScore([worse], [better], 'landscape')[0].provider, 'pixabay');
+// A small seeded RNG (mulberry32) so the shuffle-based tests are deterministic.
+const seededRng = (seed) => {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+};
 
-  // startFromB flips the lead on ties so a scene can prefer Pixabay first.
-  const pex = mk('pexels', 3), pix = mk('pixabay', 3);
-  assert.equal(interleaveByScore(pex, pix, 'landscape', false)[0].provider, 'pexels');
-  assert.equal(interleaveByScore(pex, pix, 'landscape', true)[0].provider, 'pixabay');
+test('stock: roundRobin uses every provider equally and rotates the lead', () => {
+  const mk = (provider, n) => Array.from({ length: n }, (_, i) => ({ provider, i }));
+  // Three equal-length lists → strict P,X,Y,P,X,Y round-robin.
+  const merged = roundRobin([mk('pexels', 3), mk('pixabay', 3), mk('youtube', 3)]);
+  assert.deepEqual(merged.map((c) => c.provider).slice(0, 3), ['pexels', 'pixabay', 'youtube']);
+  // Within the first 6 (a typical attempt budget across scenes) each source appears twice.
+  const head = merged.slice(0, 6).map((c) => c.provider);
+  for (const p of ['pexels', 'pixabay', 'youtube']) {
+    assert.equal(head.filter((x) => x === p).length, 2, `${p} should be used equally`);
+  }
+  // `start` rotates which provider leads, so callers vary the source per scene.
+  assert.equal(roundRobin([mk('pexels', 2), mk('pixabay', 2), mk('youtube', 2)], 2)[0].provider, 'youtube');
+  // Uneven lengths: the longer provider just fills the tail; nothing is dropped.
+  const uneven = roundRobin([mk('pexels', 1), mk('pixabay', 3)]);
+  assert.equal(uneven.length, 4);
+  assert.equal(uneven.filter((c) => c.provider === 'pixabay').length, 3);
+  // Empty input is safe.
+  assert.deepEqual(roundRobin([[], []]), []);
+  assert.deepEqual(roundRobin([]), []);
+});
+
+test('stock: rankProvider keeps quality (high score first) but varies within a tier', () => {
+  const mk = (n, extra = {}) => Array.from({ length: n }, (_, i) =>
+    ({ url: `c${i}`, provider: 'pexels', width: 1920, height: 1080, duration: 8, id: i, ...extra }));
+  // Mix one clearly worse clip (50s = download tax) with equally-good ones.
+  const good = mk(5);
+  const worse = [{ url: 'long', provider: 'pexels', width: 1920, height: 1080, duration: 50, id: 99 }];
+  const ranked = rankProvider([...worse, ...good], 'landscape', 0, { rng: seededRng(1) });
+  assert.equal(ranked[ranked.length - 1].url, 'long', 'the download-tax clip ranks last');
+  // Two different seeds reorder the equal-score tier → variety, not the same clip every time.
+  const a = rankProvider(good, 'landscape', 0, { rng: seededRng(1) }).map((c) => c.url);
+  const b = rankProvider(good, 'landscape', 0, { rng: seededRng(7) }).map((c) => c.url);
+  assert.notDeepEqual(a, b, 'different RNG seeds must yield a different in-tier order');
+  // Same set of clips though — variety, no loss.
+  assert.deepEqual([...a].sort(), [...b].sort());
+});
+
+test('stock: rankProvider floats recently-used clips to the back (cross-render dedup)', () => {
+  const mk = (n) => Array.from({ length: n }, (_, i) =>
+    ({ url: `c${i}`, provider: 'pexels', width: 1920, height: 1080, duration: 8, id: i }));
+  const clips = mk(4);
+  // Mark c0 and c1 as used by a previous render.
+  const recent = new Set(['pexels:0', 'pexels:1']);
+  const ranked = rankProvider(clips, 'landscape', 0, { rng: seededRng(3), recent });
+  const order = ranked.map((c) => clipKey(c));
+  // The two fresh clips come first; the recently-used ones are pushed to the back.
+  assert.deepEqual(order.slice(2).sort(), ['pexels:0', 'pexels:1']);
+  assert.ok(!order.slice(0, 2).includes('pexels:0') && !order.slice(0, 2).includes('pexels:1'),
+    'recently-used clips must not lead the list');
+  // But they are still present — soft demotion, never a hard exclude (no card regressions).
+  assert.equal(ranked.length, 4);
 });
 
 test('stock: isYouTubeUrl recognizes watch/share/shorts/embed, rejects stock CDNs', () => {
@@ -657,15 +701,72 @@ test('stock: isYouTubeUrl recognizes watch/share/shorts/embed, rejects stock CDN
   ]) assert.ok(!isYouTubeUrl(u), `should NOT match: ${u}`);
 });
 
-test('stock: a YouTube candidate merges in behind equal-scored stock (stock preferred)', () => {
-  // YouTube has no width/height from a flat search, so it scores below a well-shaped
-  // stock clip — and findClipCandidates merges it AFTER the stock pool. Mirror that
-  // ordering here via the same interleave the function uses for the YT pass.
-  const stock = { url: 'pexels0', provider: 'pexels', width: 1920, height: 1080, duration: 8 };
-  const yt = { url: 'https://youtu.be/x', provider: 'youtube', width: 0, height: 0, duration: 600 };
-  const merged = interleaveByScore([stock], [yt], 'landscape', false);
-  assert.equal(merged[0].provider, 'pexels', 'shaped stock clip outranks a raw YouTube hit');
-  assert.equal(merged[1].provider, 'youtube');
+test('stock: YouTube is used equally despite no width/height (round-robin, not score)', () => {
+  // Regression: YouTube has no width/height from a flat search, so it always scored
+  // below shaped stock and, with a 4-attempt budget, was never reached. Round-robin
+  // gives it an equal turn. Mirror findClipCandidates' merge: rank each provider,
+  // then round-robin across them.
+  const pexels = [{ url: 'p0', provider: 'pexels', width: 1920, height: 1080, duration: 8, id: 0 }];
+  const yt = [{ url: 'https://youtu.be/x', provider: 'youtube', width: 0, height: 0, duration: 600, id: 'x' }];
+  const lists = [pexels, yt].map((arr) => rankProvider(arr, 'landscape', 0, { rng: seededRng(2) }));
+  // YouTube leading the round-robin → a YouTube clip is the very first candidate.
+  assert.equal(roundRobin(lists, 1)[0].provider, 'youtube', 'YouTube must be reachable, not buried');
+  // Over a 2-source list the head alternates evenly.
+  const merged = roundRobin(lists, 0);
+  assert.deepEqual(merged.map((c) => c.provider), ['pexels', 'youtube']);
+});
+
+test('stock: shuffle preserves the multiset and leaves the input untouched', () => {
+  const input = [1, 2, 3, 4, 5];
+  const out = shuffle(input, seededRng(9));
+  assert.deepEqual([...out].sort((a, b) => a - b), [1, 2, 3, 4, 5], 'no element added or lost');
+  assert.deepEqual(input, [1, 2, 3, 4, 5], 'input array is not mutated');
+});
+
+// ---------- cross-render clip history (the "same clips repeated every render" fix) ----------
+test('clip-history: records used keys, dedupes, newest wins, caps at MAX_HISTORY', () => {
+  const savedWork = config.dirs.work;
+  config.dirs.work = fs.mkdtempSync(path.join(os.tmpdir(), 'av_clip_hist_'));
+  try {
+    clearClipHistory();
+    assert.deepEqual([...loadRecentClips()], [], 'empty/missing history loads as an empty set');
+
+    recordUsedClips(['pexels:1', 'pixabay:2', '', null, 'pexels:1']); // junk + dupe dropped
+    assert.deepEqual([...loadRecentClips()].sort(), ['pexels:1', 'pixabay:2']);
+
+    // Re-using a key moves it to the newest end (so it stays remembered longest).
+    recordUsedClips(['pexels:1', 'youtube:9']);
+    const after = [...loadRecentClips()];
+    assert.deepEqual(after.sort(), ['pexels:1', 'pixabay:2', 'youtube:9']);
+
+    // Cap: writing more than MAX_HISTORY keeps only the most recent ones.
+    const many = Array.from({ length: MAX_HISTORY + 50 }, (_, i) => `pexels:k${i}`);
+    recordUsedClips(many);
+    const capped = loadRecentClips();
+    assert.equal(capped.size, MAX_HISTORY, 'history is capped');
+    assert.ok(capped.has(`pexels:k${MAX_HISTORY + 49}`), 'the newest key survives');
+    assert.ok(!capped.has('pexels:k0'), 'the oldest overflow key is dropped');
+  } finally {
+    fs.rmSync(config.dirs.work, { recursive: true, force: true });
+    config.dirs.work = savedWork;
+  }
+});
+
+test('footage: recently-used clips are forwarded to the ranker (cross-render variety)', async () => {
+  // acquireFootage must pass `recent` through to findClipCandidates so past renders
+  // bias selection away from repeats.
+  let sawRecent = null;
+  const deps = {
+    findClipCandidates: async (q, o, lead, minDur, sources, opts) => {
+      sawRecent = opts && opts.recent;
+      return [{ url: 'a', provider: 'pexels', width: 1920, height: 1080, duration: 8 }];
+    },
+    downloadClip: async (url) => `/raw/${url}.mp4`,
+  };
+  const recent = new Set(['pexels:7']);
+  const got = await acquireFootage({ queries: ['q'], orientation: 'landscape', base: 's1', recent }, deps);
+  assert.ok(got);
+  assert.equal(sawRecent, recent, 'the recent set must reach the ranker');
 });
 
 // ---------- share kit (share.js, pure) ----------
