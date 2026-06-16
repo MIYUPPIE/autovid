@@ -23,7 +23,9 @@ import { normalizeBrand, DEFAULT_BRAND } from '../src/brand.js';
 import { buildXfadeGraph, TRANSITIONS, nearestAspect, logoOverlayXY } from '../src/ffmpeg.js';
 import { transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from '../src/transcribe.js';
 import { buildDubPrompt, cleanDubText } from '../src/dub.js';
-import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes } from '../src/pipeline.js';
+import { runPipeline, runMultiPipeline, getJob, acquireFootage, buildSceneTexts, allocateDurations, expandScenes, resolveBatchVoices, PROCESSORS, memoryCtx } from '../src/pipeline.js';
+import { submitRender, jobView, queueEnabled, activeBackend } from '../src/jobs.js';
+import { stateToStatus, viewFromState, progressAccumulator } from '../src/queue.js';
 import { buildProject, saveProject } from '../src/project.js';
 import { assetToUrl, MEDIA_DIRS, previewBundle } from '../src/edit.js';
 import { buildHashtags, buildCaptions, buildPlatformLinks, buildShareKit, lanBaseUrl } from '../src/share.js';
@@ -35,6 +37,20 @@ import { app } from '../src/server.js';
 
 // Keep project-endpoint tests off the real assets dir.
 config.dirs.projects = fs.mkdtempSync(path.join(os.tmpdir(), 'av_gate_proj_'));
+
+// Drive an in-memory job to a terminal state (bounded). The pipeline tests blank
+// the LLM key so the background work fails at the first LLM call — we await that
+// failure WHILE the key is still blank, so no real network render leaks past the
+// test (that's what kept the offline gate suite honest and fast).
+async function settle(id, ms = 2000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    const j = getJob(id);
+    if (!j || j.status !== 'running') return j;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  return getJob(id);
+}
 
 // ---------- voices ----------
 test('voices: defaults follow the audience toggle', () => {
@@ -197,7 +213,7 @@ test('pipeline: runPipeline is synchronous, not async', () => {
   assert.equal(runPipeline.constructor.name, 'Function');
 });
 
-test('pipeline: runPipeline returns a string job id synchronously and registers the job', () => {
+test('pipeline: runPipeline returns a string job id synchronously and registers the job', async () => {
   // Blank the xAI key so the background worker fails immediately (offline, no network).
   const savedKey = config.xaiKey;
   config.xaiKey = '';
@@ -210,13 +226,16 @@ test('pipeline: runPipeline returns a string job id synchronously and registers 
     assert.equal(typeof id, 'string');
     assert.ok(id.length > 0);
     assert.ok(getJob(id), 'job should be registered immediately');
+    // Wait for the offline failure with the key still blank (no leaked render).
+    const done = await settle(id);
+    assert.equal(done.status, 'error');
   } finally {
     config.xaiKey = savedKey;
   }
 });
 
 // ---------- multi-language one-shot (#1) ----------
-test('pipeline: runMultiPipeline fans out into one registered job per language', () => {
+test('pipeline: runMultiPipeline fans out into one registered job per language', async () => {
   const savedKey = config.xaiKey;
   config.xaiKey = ''; // background workers fail fast, offline
   try {
@@ -235,9 +254,149 @@ test('pipeline: runMultiPipeline fans out into one registered job per language',
     }
     // No valid voice at all → throws (caught by the endpoint as 400).
     assert.throws(() => runMultiPipeline({ topic: 't', voice: 'bogus', voices: [] }));
+    // Settle all variants offline before restoring the key (no leaked renders).
+    await Promise.all(batch.jobs.map((j) => settle(j.jobId)));
   } finally {
     config.xaiKey = savedKey;
   }
+});
+
+// ---------- job queue facade (Redis/BullMQ backend, additive) ----------
+test('queue: defaults to the in-memory backend when no REDIS_URL', () => {
+  // The whole gate suite runs offline, so the queue must NOT require Redis.
+  // jobView/submit* fall through to the in-memory pipeline functions.
+  assert.equal(queueEnabled(), false);
+  assert.equal(activeBackend(), 'memory');
+});
+
+test('queue: PROCESSORS exposes exactly the four job kinds the worker dispatches', () => {
+  assert.deepEqual(Object.keys(PROCESSORS).sort(), ['dub', 'project-render', 'render', 'shorts']);
+  for (const fn of Object.values(PROCESSORS)) assert.equal(typeof fn, 'function');
+});
+
+test('pipeline: memoryCtx exposes the job id and mirrors emit/setPlan onto the job', () => {
+  // Regression: processors use ctx.id as the asset/project base, so the in-memory
+  // ctx MUST carry the job id (a render with ctx.id === undefined wrote
+  // "undefined_final.mp4" and saved a project with no id).
+  const job = { id: 'JOB123', log: [], progress: { stage: 'init', message: '', pct: 0 }, plan: null };
+  const ctx = memoryCtx(job);
+  assert.equal(ctx.id, 'JOB123', 'ctx.id must equal the job id');
+
+  ctx.emit('voice', 'recording', 16);
+  assert.equal(ctx.pct, 16);
+  assert.deepEqual(job.progress, { stage: 'voice', message: 'recording', pct: 16 });
+  assert.equal(job.log.length, 1);
+  assert.equal(job.log[0].stage, 'voice');
+
+  ctx.setPlan({ title: 'Hi' });
+  assert.deepEqual(job.plan, { title: 'Hi' });
+});
+
+test('pipeline: resolveBatchVoices dedupes, drops junk, throws when nothing is valid', () => {
+  const variants = resolveBatchVoices({
+    voice: 'en-NG-EzinneNeural',
+    voices: ['yarn-yor-f', 'yarn-ibo-f', 'en-NG-EzinneNeural', 'not-a-voice'],
+  });
+  // base + 2 extras; the dupe of the base and the junk id are dropped.
+  assert.equal(variants.length, 3);
+  assert.deepEqual(variants.map((v) => v.language).sort(), ['English', 'Igbo', 'Yoruba']);
+  assert.ok(variants.every((v) => typeof v.voice === 'string'));
+  assert.throws(() => resolveBatchVoices({ voice: 'bogus', voices: [] }), /no valid voices/);
+});
+
+test('queue: submitRender (memory) returns a string id and jobView reports the SAME shape', async () => {
+  // Blank the key so the background worker fails immediately, offline — this
+  // exercises the full ctx/runner path and the error surface of jobView.
+  const savedKey = config.xaiKey;
+  config.xaiKey = '';
+  try {
+    const id = await submitRender({
+      topic: 'queue test', context: 'global', aspect: '16:9', targetSeconds: 30,
+      tone: 'engaging', voice: 'en-US-AvaNeural', rate: '+0%', subtitles: false,
+    });
+    assert.equal(typeof id, 'string');
+    // jobView mirrors the memory job object: id/status/progress/log/result/error.
+    const view = await jobView(id);
+    assert.ok(view);
+    assert.equal(view.id, id);
+    assert.ok(['running', 'error'].includes(view.status));
+    assert.ok(Array.isArray(view.log));
+    assert.ok(view.progress && typeof view.progress.pct === 'number');
+
+    // Drive it to a terminal state (bounded) and confirm the error propagates.
+    const t0 = Date.now();
+    let final = view;
+    while (Date.now() - t0 < 1500 && final.status === 'running') {
+      await new Promise((r) => setTimeout(r, 10));
+      final = await jobView(id);
+    }
+    assert.equal(final.status, 'error', 'a blank XAI key must fail the render');
+    assert.match(final.error || '', /XAI_API_KEY/);
+    assert.ok(final.log.some((e) => e.stage === 'error'), 'the error is logged for the SSE stream');
+  } finally {
+    config.xaiKey = savedKey;
+  }
+});
+
+test('queue: jobView returns null for an unknown id (memory backend)', async () => {
+  assert.equal(await jobView('does-not-exist'), null);
+});
+
+// The Redis backend's translation logic, proven offline (the live round-trip is
+// the paid eval `npm run eval:queue`, which needs a Redis).
+test('queue: stateToStatus maps BullMQ states to the in-memory vocabulary', () => {
+  assert.equal(stateToStatus('completed'), 'done');
+  assert.equal(stateToStatus('failed'), 'error');
+  for (const s of ['waiting', 'active', 'delayed', 'paused', 'unknown']) {
+    assert.equal(stateToStatus(s), 'running', `${s} should read as running`);
+  }
+});
+
+test('queue: viewFromState rebuilds the exact /api/job shape from a BullMQ job', () => {
+  // A completed job with a persisted progress payload (log + plan ride inside it).
+  const job = {
+    id: 'abc123', name: 'render',
+    progress: { stage: 'done', message: 'Render complete', pct: 100, log: [{ t: 1, stage: 'planning', message: 'hi' }], plan: { title: 'X' } },
+    returnvalue: { file: 'abc123_final.mp4', projectId: 'abc123' },
+    failedReason: null,
+  };
+  const v = viewFromState(job, 'completed');
+  assert.equal(v.id, 'abc123');
+  assert.equal(v.kind, 'render');
+  assert.equal(v.status, 'done');
+  assert.deepEqual(v.progress, { stage: 'done', message: 'Render complete', pct: 100 });
+  assert.deepEqual(v.plan, { title: 'X' });
+  assert.equal(v.result.file, 'abc123_final.mp4');
+  assert.equal(v.log.length, 1);
+
+  // A failed job surfaces the reason as `error`; a bare/new job is safe defaults.
+  const failed = viewFromState({ id: 'z', name: 'dub', failedReason: 'boom' }, 'failed');
+  assert.equal(failed.status, 'error');
+  assert.equal(failed.error, 'boom');
+  assert.deepEqual(failed.progress, { stage: 'init', message: '', pct: 0 });
+  assert.deepEqual(failed.log, []);
+  assert.equal(failed.result, null);
+});
+
+test('queue: progressAccumulator builds the cumulative payload viewFromState reads back', () => {
+  const acc = progressAccumulator(2);
+  assert.equal(acc.pct, 2);
+  acc.emit('planning', 'writing', 5);
+  acc.setPlan({ title: 'My Video' });
+  acc.emit('voice', 'recording', 16);
+  assert.equal(acc.pct, 16);
+  const snap = acc.snapshot();
+  assert.deepEqual({ stage: snap.stage, message: snap.message, pct: snap.pct }, { stage: 'voice', message: 'recording', pct: 16 });
+  assert.equal(snap.log.length, 2, 'every emit appends one cumulative log entry');
+  assert.deepEqual(snap.plan, { title: 'My Video' });
+
+  // The snapshot is exactly what the worker persists → feed it through
+  // viewFromState and the SSE stream sees a faithful running view.
+  const v = viewFromState({ id: 'q', name: 'render', progress: snap }, 'active');
+  assert.equal(v.status, 'running');
+  assert.equal(v.progress.pct, 16);
+  assert.equal(v.log.length, 2);
+  assert.deepEqual(v.plan, { title: 'My Video' });
 });
 
 // ---------- pluggable LLM provider ----------

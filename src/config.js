@@ -25,6 +25,24 @@ export const config = {
   port: parseInt(process.env.PORT || '3000', 10),
   ttsEngine: process.env.TTS_ENGINE || 'edge-tts',
 
+  // Job queue. With REDIS_URL set, renders/dubs/shorts are enqueued to a
+  // BullMQ queue backed by Redis instead of an in-memory map, so a render
+  // survives a server restart (the job persists; a worker re-runs it). Without
+  // it, the in-memory path runs (single box, work lost if the process dies).
+  redisUrl: process.env.REDIS_URL || '',
+  // BullMQ queue name + key prefix (lets several apps share one Redis).
+  queueName: process.env.QUEUE_NAME || 'griotvid',
+  queuePrefix: process.env.QUEUE_PREFIX || 'griotvid',
+  // How many jobs one worker runs at once. Renders are GPU/CPU-heavy, so 1 is
+  // the safe default on a single box; raise it only with the cores to spare.
+  workerConcurrency: parseInt(process.env.WORKER_CONCURRENCY || '1', 10),
+  // When Redis is on, also run a worker inside the web process (single-box
+  // convenience, default on). Set WORKER_INLINE=0 to make the web server
+  // enqueue-only and run `npm run worker` as a separate process (scale-out).
+  workerInline: process.env.WORKER_INLINE !== '0',
+  // SSE/poll cadence for reading job status (ms).
+  jobPollMs: parseInt(process.env.JOB_POLL_MS || '400', 10),
+
   // Public origin a shared link should point at. Empty = derive from the request
   // host (localhost/LAN). Set this when the app is reached through a tunnel or a
   // real domain so the links a post carries resolve for other people.

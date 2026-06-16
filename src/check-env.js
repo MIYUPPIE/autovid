@@ -28,4 +28,18 @@ console.log(`  ${config.pexelsKey ? '✓' : '✗'} PEXELS_API_KEY`);
 console.log(`  ${config.pixabayKey ? '✓' : '✗'} PIXABAY_API_KEY`);
 console.log(`  ${config.jamendoClientId ? '✓' : '✗'} JAMENDO_CLIENT_ID  (auto background music)`);
 console.log(`  ${config.yarnKey ? '✓' : '✗'} YARN_API_KEY  (Yoruba/Igbo/Hausa voices)`);
+
+console.log('\nJob queue:');
+if (!config.redisUrl) {
+  console.log('  • in-memory (no REDIS_URL) — jobs run inline and are lost if the process restarts');
+} else {
+  // Reachability check so a bad REDIS_URL is caught before the first render.
+  await check(`redis (${config.redisUrl})`, async () => {
+    const { default: IORedis } = await import('ioredis');
+    const conn = new IORedis(config.redisUrl, { maxRetriesPerRequest: 1, lazyConnect: true, connectTimeout: 3000 });
+    conn.on('error', () => {}); // the check() wrapper reports the failure; don't let ioredis log it too
+    try { await conn.connect(); const pong = await conn.ping(); return `${pong} — BullMQ backend ready (queue "${config.queueName}")`; }
+    finally { conn.disconnect(); }
+  });
+}
 console.log('');

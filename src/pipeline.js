@@ -24,7 +24,10 @@ import { translateForDub } from './dub.js';
 const GAP_BETWEEN_LANGS = 0.25;
 const GAP_BETWEEN_SCENES = 0.5;
 
-// In-memory job registry. For production, back this with Redis.
+// In-memory job registry — the default backend when no Redis is configured.
+// The queue layer (src/queue.js) swaps this for a BullMQ/Redis-backed registry
+// so renders survive a restart; the HEAVY work in both cases is the shared
+// processX(opts, ctx) functions below, so there's one code path for the logic.
 const jobs = new Map();
 
 export function getJob(id) {
@@ -35,42 +38,85 @@ export function getJob(id) {
 const RENDER_PCT = { init: 2, normalize: 40, concat: 80, finalize: 90, done: 100, error: 100 };
 
 /**
- * Kick off an incremental re-render of a saved project. Registers a job in the
- * same map the /api/job endpoints poll, so the client reuses existing plumbing.
- * Returns the job id, or null if the project doesn't exist.
+ * Progress reporter for the in-memory path: mutates the live job object the
+ * /api/job endpoints poll. The Redis path builds an equivalent ctx that writes
+ * to BullMQ's persisted job.updateProgress instead. A processor only ever talks
+ * to `ctx`, so it's agnostic to where the job lives.
  */
-export function startProjectRender(projectId) {
-  const project = loadProject(projectId);
-  if (!project) return null;
+export function memoryCtx(job) {
+  const ctx = {
+    id: job.id, // processors use this as the asset/project base — must match the job id
+    pct: job.progress?.pct ?? 0,
+    emit(stage, message, pct) {
+      ctx.pct = pct;
+      job.progress = { stage, message, pct };
+      job.log.push({ t: Date.now(), stage, message });
+    },
+    setPlan(plan) { job.plan = plan; },
+  };
+  return ctx;
+}
+
+/**
+ * Register an in-memory job and run `processor(args, ctx)` in the background.
+ * Returns the job id SYNCHRONOUSLY (the client polls /api/job/:id), and the job
+ * is in the map before this returns. This is the contract the gate tests pin:
+ * runPipeline must stay a plain Function that hands back a string id at once.
+ */
+function runMemory({ kind, processor, args, startMessage = 'Starting', startPct = 0 }) {
   const id = nanoid(10);
   const job = {
-    id, kind: 'render', status: 'running', createdAt: Date.now(),
-    log: [], progress: { stage: 'init', message: 'Starting re-render', pct: 2 },
-    result: null, error: null,
+    id, kind, status: 'running', createdAt: Date.now(), opts: args,
+    log: [], progress: { stage: 'init', message: startMessage, pct: startPct },
+    result: null, error: null, plan: null,
   };
   jobs.set(id, job);
-
-  (async () => {
-    try {
-      const out = await renderProject(project, {
-        onProgress: (stage, message) => emit(job, stage, message, RENDER_PCT[stage] ?? job.progress.pct),
-      });
-      job.result = { file: out.file, path: out.outputPath, projectId, plan: out.plan };
-      job.status = 'done';
-      emit(job, 'done', 'Re-render complete', 100);
-    } catch (err) {
+  const ctx = memoryCtx(job);
+  Promise.resolve()
+    .then(() => processor(args, ctx))
+    .then((result) => { job.result = result; job.status = 'done'; })
+    .catch((err) => {
       job.status = 'error';
       job.error = err.message;
-      emit(job, 'error', err.message, job.progress.pct);
-    }
-  })();
-
+      ctx.emit('error', err.message, ctx.pct);
+    });
   return id;
 }
 
-function emit(job, stage, message, pct) {
-  job.progress = { stage, message, pct };
-  job.log.push({ t: Date.now(), stage, message });
+// The four heavy processors keyed by job kind. The Redis worker dispatches on
+// the same keys, so adding a queue never re-implements pipeline logic.
+export const PROCESSORS = {
+  render: processRender,
+  dub: processDub,
+  shorts: processShorts,
+  'project-render': processProjectRender,
+};
+
+/**
+ * Incrementally re-render a saved project. Pure work + progress via ctx; throws
+ * on failure (the runner/worker records the error). Shared by the in-memory
+ * startProjectRender wrapper and the Redis worker.
+ */
+export async function processProjectRender({ projectId }, ctx) {
+  const project = loadProject(projectId);
+  if (!project) throw new Error('project not found');
+  const out = await renderProject(project, {
+    onProgress: (stage, message) => ctx.emit(stage, message, RENDER_PCT[stage] ?? ctx.pct),
+  });
+  ctx.emit('done', 'Re-render complete', 100);
+  return { file: out.file, path: out.outputPath, projectId, plan: out.plan };
+}
+
+/**
+ * Kick off an incremental re-render (in-memory path). Returns the job id, or
+ * null if the project doesn't exist (so the endpoint can 404).
+ */
+export function startProjectRender(projectId) {
+  if (!loadProject(projectId)) return null;
+  return runMemory({
+    kind: 'render', processor: processProjectRender, args: { projectId },
+    startMessage: 'Starting re-render', startPct: 2,
+  });
 }
 
 // How many clips we'll attempt to download per query before giving up on it.
@@ -203,16 +249,23 @@ export function allocateDurations(sceneTexts, total, floor = 2.5) {
  *   { batchId, jobs: [{ voice, language, jobId }] }
  * `voices` is deduped; the optional base `opts.voice` is included too.
  */
-export function runMultiPipeline(opts) {
+// Resolve a multi-language batch into the distinct, valid {voice, language}
+// variants to render: the base voice plus any extras, deduped, junk dropped.
+// Pure — both the in-memory fan-out and the Redis fan-out use it so the two
+// paths pick the exact same set of variants. Throws if nothing is valid.
+export function resolveBatchVoices(opts) {
   const wanted = [];
   const seen = new Set();
   for (const v of [opts.voice, ...(opts.voices || [])]) {
     if (v && getVoice(v) && !seen.has(v)) { seen.add(v); wanted.push(v); }
   }
   if (wanted.length === 0) throw new Error('no valid voices for a multi-language batch');
+  return wanted.map((voice) => ({ voice, language: getVoice(voice)?.lang || 'English' }));
+}
+
+export function runMultiPipeline(opts) {
   const batchId = nanoid(10);
-  const jobsOut = wanted.map((voice) => {
-    const language = getVoice(voice)?.lang || 'English';
+  const jobsOut = resolveBatchVoices(opts).map(({ voice, language }) => {
     // Strip voice2 so each variant is a single-language render in `voice`.
     const jobId = runPipeline({ ...opts, voice, voice2: null, batchId });
     return { voice, language, jobId };
@@ -226,96 +279,83 @@ export function runMultiPipeline(opts) {
  * one-scene project (source = the uploaded video) so it flows through the SAME
  * incremental render + editor + share path as a generated video. Returns a jobId.
  */
-export function runDub(opts) {
-  const id = nanoid(10);
-  const job = {
-    id, kind: 'dub', status: 'running', createdAt: Date.now(), opts,
-    log: [], progress: { stage: 'init', message: 'Starting dub', pct: 2 }, result: null, error: null,
+export async function processDub(opts, ctx) {
+  const id = ctx.id;
+  const { videoPath, voice, rate = '+0%', subtitles = true, model = 'base', sourceLang = null } = opts;
+  if (!videoPath || !fs.existsSync(videoPath)) throw new Error('dub: video file not found');
+  const targetLanguage = getVoice(voice)?.lang || 'English';
+  const { w, h } = await probeSize(videoPath);
+  const aspect = RESOLUTIONS[opts.aspect] ? opts.aspect : nearestAspect(w, h);
+  const videoDur = await probeDuration(videoPath);
+
+  // 1. Transcribe the original audio.
+  ctx.emit('transcribe', 'Listening to the original audio…', 8);
+  const audio = await extractAudio({ input: videoPath, outBase: id });
+  const tr = await transcribe(audio, { model, language: sourceLang });
+  const sourceText = transcriptText(tr.segments);
+  if (!sourceText) throw new Error('dub: no speech found in the video');
+  ctx.emit('transcribe', `Heard ${tr.segments.length} lines (${tr.language})`, 28);
+
+  // 2. Translate into the target language.
+  ctx.emit('translate', `Translating into ${targetLanguage}…`, 35);
+  const translated = await translateForDub(sourceText, targetLanguage);
+
+  // 3. Re-narrate the translation in the chosen voice.
+  ctx.emit('voice', `Recording the ${targetLanguage} voiceover…`, 45);
+  const m = await synthesizeVoice({
+    text: translated, voice, rate, outBase: `${id}_vo`,
+    onProgress: (nDone, total) => total > 1 && ctx.emit('voice', `Recording voiceover… (${nDone}/${total})`, 45),
+  });
+
+  // 4. Captions from the new narration's real timing.
+  let captionCues = null;
+  if (subtitles) {
+    const cues = m.cues?.length
+      ? m.cues
+      : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
+    captionCues = cues && cues.length ? cues : null;
+  }
+
+  // 5. Reconcile lengths. A translation is rarely the same length as the
+  // original, so the timeline runs for max(video, voiceover): the footage
+  // plays once and holds its last frame (freeze, never loops) if the voice is
+  // longer; the voice is padded with trailing silence if the footage is
+  // longer. No looped video, no clipped voice, no frozen-vs-cut mismatch.
+  const voDur = m.duration;
+  const target = Math.max(videoDur || voDur, voDur);
+  let voicePath = m.audioPath;
+  if (target - voDur > 0.05) {
+    voicePath = await padAudio({ input: m.audioPath, outBase: `${id}_vo`, trail: target - voDur });
+  }
+
+  ctx.emit('render', 'Laying the new voice over the video…', 60);
+  const project = buildProject({
+    id, opts: { topic: `Dub → ${targetLanguage}`, fades: false, motion: false },
+    plan: { title: `${(tr.language || 'video').toUpperCase()} → ${targetLanguage} dub` },
+    aspect, fps: 30, language: targetLanguage,
+    voiceTrack: { path: voicePath, duration: target },
+    captions: { enabled: Boolean(captionCues), cues: captionCues || [], style: opts.captionStyle || {} },
+    music: null,
+    scenes: [{
+      index: 1, narration: translated, query: '',
+      sourcePath: videoPath, clipPath: null, duration: target, motion: false, freeze: true,
+    }],
+  });
+  project.dub = { sourceLanguage: tr.language, targetLanguage, sourceText };
+
+  const out = await renderProject(project, {
+    onProgress: (stage, message) => ctx.emit(stage, message, RENDER_PCT[stage] ?? ctx.pct),
+  });
+
+  ctx.emit('done', 'Dub complete', 100);
+  return {
+    file: path.basename(out.outputPath), path: out.outputPath, projectId: id,
+    title: project.title, language: targetLanguage, dub: true,
   };
-  jobs.set(id, job);
+}
 
-  (async () => {
-    try {
-      const { videoPath, voice, rate = '+0%', subtitles = true, model = 'base', sourceLang = null } = opts;
-      if (!videoPath || !fs.existsSync(videoPath)) throw new Error('dub: video file not found');
-      const targetLanguage = getVoice(voice)?.lang || 'English';
-      const { w, h } = await probeSize(videoPath);
-      const aspect = RESOLUTIONS[opts.aspect] ? opts.aspect : nearestAspect(w, h);
-      const videoDur = await probeDuration(videoPath);
-
-      // 1. Transcribe the original audio.
-      emit(job, 'transcribe', 'Listening to the original audio…', 8);
-      const audio = await extractAudio({ input: videoPath, outBase: id });
-      const tr = await transcribe(audio, { model, language: sourceLang });
-      const sourceText = transcriptText(tr.segments);
-      if (!sourceText) throw new Error('dub: no speech found in the video');
-      emit(job, 'transcribe', `Heard ${tr.segments.length} lines (${tr.language})`, 28);
-
-      // 2. Translate into the target language.
-      emit(job, 'translate', `Translating into ${targetLanguage}…`, 35);
-      const translated = await translateForDub(sourceText, targetLanguage);
-
-      // 3. Re-narrate the translation in the chosen voice.
-      emit(job, 'voice', `Recording the ${targetLanguage} voiceover…`, 45);
-      const m = await synthesizeVoice({
-        text: translated, voice, rate, outBase: `${id}_vo`,
-        onProgress: (nDone, total) => total > 1 && emit(job, 'voice', `Recording voiceover… (${nDone}/${total})`, 45),
-      });
-
-      // 4. Captions from the new narration's real timing.
-      let captionCues = null;
-      if (subtitles) {
-        const cues = m.cues?.length
-          ? m.cues
-          : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
-        captionCues = cues && cues.length ? cues : null;
-      }
-
-      // 5. Reconcile lengths. A translation is rarely the same length as the
-      // original, so the timeline runs for max(video, voiceover): the footage
-      // plays once and holds its last frame (freeze, never loops) if the voice is
-      // longer; the voice is padded with trailing silence if the footage is
-      // longer. No looped video, no clipped voice, no frozen-vs-cut mismatch.
-      const voDur = m.duration;
-      const target = Math.max(videoDur || voDur, voDur);
-      let voicePath = m.audioPath;
-      if (target - voDur > 0.05) {
-        voicePath = await padAudio({ input: m.audioPath, outBase: `${id}_vo`, trail: target - voDur });
-      }
-
-      emit(job, 'render', 'Laying the new voice over the video…', 60);
-      const project = buildProject({
-        id, opts: { topic: `Dub → ${targetLanguage}`, fades: false, motion: false },
-        plan: { title: `${(tr.language || 'video').toUpperCase()} → ${targetLanguage} dub` },
-        aspect, fps: 30, language: targetLanguage,
-        voiceTrack: { path: voicePath, duration: target },
-        captions: { enabled: Boolean(captionCues), cues: captionCues || [], style: opts.captionStyle || {} },
-        music: null,
-        scenes: [{
-          index: 1, narration: translated, query: '',
-          sourcePath: videoPath, clipPath: null, duration: target, motion: false, freeze: true,
-        }],
-      });
-      project.dub = { sourceLanguage: tr.language, targetLanguage, sourceText };
-
-      const out = await renderProject(project, {
-        onProgress: (stage, message) => emit(job, stage, message, RENDER_PCT[stage] ?? job.progress.pct),
-      });
-
-      job.result = {
-        file: path.basename(out.outputPath), path: out.outputPath, projectId: id,
-        title: project.title, language: targetLanguage, dub: true,
-      };
-      job.status = 'done';
-      emit(job, 'done', 'Dub complete', 100);
-    } catch (err) {
-      job.status = 'error';
-      job.error = err.message;
-      emit(job, 'error', err.message, job.progress.pct);
-    }
-  })();
-
-  return id;
+export function runDub(opts) {
+  return runMemory({ kind: 'dub', processor: processDub, args: opts, startMessage: 'Starting dub', startPct: 2 });
 }
 
 /**
@@ -324,388 +364,362 @@ export function runDub(opts) {
  * kept). Returns a jobId; result.shorts lists the cut files. The creator-economy
  * money feature — one upload → several ready-to-post clips.
  */
-export function runShorts(opts) {
-  const id = nanoid(10);
-  const job = {
-    id, kind: 'shorts', status: 'running', createdAt: Date.now(), opts,
-    log: [], progress: { stage: 'init', message: 'Starting', pct: 2 }, result: null, error: null,
-  };
-  jobs.set(id, job);
+export async function processShorts(opts, ctx) {
+  const id = ctx.id;
+  const {
+    videoPath, count = 3, aspect = '9:16', subtitles = true, model = 'base',
+    minSec = 15, maxSec = 60, sourceLang = null,
+  } = opts;
+  if (!videoPath || !fs.existsSync(videoPath)) throw new Error('shorts: video file not found');
+  const outAspect = RESOLUTIONS[aspect] ? aspect : '9:16';
 
-  (async () => {
-    try {
-      const {
-        videoPath, count = 3, aspect = '9:16', subtitles = true, model = 'base',
-        minSec = 15, maxSec = 60, sourceLang = null,
-      } = opts;
-      if (!videoPath || !fs.existsSync(videoPath)) throw new Error('shorts: video file not found');
-      const outAspect = RESOLUTIONS[aspect] ? aspect : '9:16';
+  ctx.emit('transcribe', 'Transcribing the video…', 10);
+  const audio = await extractAudio({ input: videoPath, outBase: id });
+  const tr = await transcribe(audio, { model, language: sourceLang });
+  if (!tr.segments.length) throw new Error('shorts: no speech found to clip');
 
-      emit(job, 'transcribe', 'Transcribing the video…', 10);
-      const audio = await extractAudio({ input: videoPath, outBase: id });
-      const tr = await transcribe(audio, { model, language: sourceLang });
-      if (!tr.segments.length) throw new Error('shorts: no speech found to clip');
+  const windows = pickTopWindows(highlightWindows(tr.segments, { minSec, maxSec }), count);
+  if (!windows.length) throw new Error('shorts: no usable highlight windows');
+  ctx.emit('editing', `Cutting ${windows.length} shorts…`, 35);
 
-      const windows = pickTopWindows(highlightWindows(tr.segments, { minSec, maxSec }), count);
-      if (!windows.length) throw new Error('shorts: no usable highlight windows');
-      emit(job, 'editing', `Cutting ${windows.length} shorts…`, 35);
-
-      const shorts = [];
-      for (let i = 0; i < windows.length; i++) {
-        const win = windows[i];
-        let captionsPath = null;
-        if (subtitles) {
-          // Prefer exact per-word timing; fall back to segment-level cues when a
-          // transcript carries no word timestamps.
-          const wordCues = windowWordCues(tr.segments, win.start, win.end);
-          const cues = wordCues.length ? wordCues : windowCues(tr.segments, win.start, win.end);
-          if (cues.length) {
-            captionsPath = buildKaraokeAss({
-              cues, aspect: outAspect, assPath: path.join(config.dirs.audio, `${id}_short${i}.ass`),
-              style: opts.captionStyle || {},
-            });
-          }
-        }
-        const outName = `${id}_short${i + 1}.mp4`;
-        const out = await makeShort({ input: videoPath, start: win.start, end: win.end, aspect: outAspect, captions: captionsPath, outName });
-        shorts.push({ file: path.basename(out), path: out, start: win.start, end: win.end, seconds: Math.round(win.end - win.start) });
-        emit(job, 'editing', `Short ${i + 1}/${windows.length} ready`, 35 + Math.round(((i + 1) / windows.length) * 60));
+  const shorts = [];
+  for (let i = 0; i < windows.length; i++) {
+    const win = windows[i];
+    let captionsPath = null;
+    if (subtitles) {
+      // Prefer exact per-word timing; fall back to segment-level cues when a
+      // transcript carries no word timestamps.
+      const wordCues = windowWordCues(tr.segments, win.start, win.end);
+      const cues = wordCues.length ? wordCues : windowCues(tr.segments, win.start, win.end);
+      if (cues.length) {
+        captionsPath = buildKaraokeAss({
+          cues, aspect: outAspect, assPath: path.join(config.dirs.audio, `${id}_short${i}.ass`),
+          style: opts.captionStyle || {},
+        });
       }
-
-      job.result = { shorts, count: shorts.length, language: tr.language };
-      job.status = 'done';
-      emit(job, 'done', `Made ${shorts.length} shorts`, 100);
-    } catch (err) {
-      job.status = 'error';
-      job.error = err.message;
-      emit(job, 'error', err.message, job.progress.pct);
     }
-  })();
+    const outName = `${id}_short${i + 1}.mp4`;
+    const out = await makeShort({ input: videoPath, start: win.start, end: win.end, aspect: outAspect, captions: captionsPath, outName });
+    shorts.push({ file: path.basename(out), path: out, start: win.start, end: win.end, seconds: Math.round(win.end - win.start) });
+    ctx.emit('editing', `Short ${i + 1}/${windows.length} ready`, 35 + Math.round(((i + 1) / windows.length) * 60));
+  }
 
-  return id;
+  ctx.emit('done', `Made ${shorts.length} shorts`, 100);
+  return { shorts, count: shorts.length, language: tr.language };
+}
+
+export function runShorts(opts) {
+  return runMemory({ kind: 'shorts', processor: processShorts, args: opts, startMessage: 'Starting', startPct: 2 });
+}
+
+/**
+ * The full topic→video pipeline. Pure work + progress via ctx; returns the
+ * render result and throws on failure (the runner/worker records it). Shared by
+ * the in-memory runPipeline wrapper and the Redis worker, so the queue never
+ * re-implements any of this logic.
+ */
+export async function processRender(opts, ctx) {
+  const id = ctx.id;
+  const {
+    topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
+    subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
+    captionStyle = {}, codeSwitch = false, beatSync = true, bRoll = true,
+    transition = 'cut', useYouTube = false,
+  } = opts;
+  // Footage source pool. YouTube is opt-in (slower yt-dlp pull, gray-area
+  // licensing), so it only joins the pool when the creator asks for it.
+  const sources = useYouTube ? ['pexels', 'pixabay', 'youtube'] : ['pexels', 'pixabay'];
+  // Crossfade headroom: with transitions on, each scene clip is rendered this
+  // much longer so the xfade overlap nets back to the intended cut times.
+  const xfadeDur = transition && transition !== 'cut' ? config.transitionSeconds : 0;
+
+  // Brand kit (#10): one persisted identity applied to every video. Caption
+  // colours feed the karaoke style; card colours/intro/outro/logo are applied
+  // below. Brand intro/outro bookends are single-narration only.
+  const brand = loadBrand();
+  if (brand.captionPrimary && captionStyle.primary == null) captionStyle.primary = hexToAss(brand.captionPrimary);
+  if (brand.captionSecondary && captionStyle.secondary == null) captionStyle.secondary = hexToAss(brand.captionSecondary);
+  const orientation = orientationFor(aspect);
+  const language = getVoice(voice)?.lang || 'English';
+  const hasScript = Boolean(script && script.trim());
+  const bilingual = Boolean(voice2 && getVoice(voice2));
+  const language2 = bilingual ? getVoice(voice2).lang : null;
+
+  // 1. Plan — four combinations of {topic|script} × {single|bilingual}.
+  let plan;
+  if (bilingual && hasScript) {
+    ctx.emit('planning', `Localizing your script into ${language} + ${language2}…`, 5);
+    plan = await planBilingualFromScript({ script, context, language, language2 });
+  } else if (bilingual) {
+    ctx.emit('planning', `Writing a bilingual script (${language} + ${language2})…`, 5);
+    plan = await generateBilingualPlan({ topic, context, targetSeconds, tone, language, language2 });
+  } else if (hasScript) {
+    ctx.emit('planning', 'Planning visuals for your script…', 5);
+    plan = await planFromScript({ script, context, language });
+  } else {
+    ctx.emit('planning', `Writing the script with Grok (${language})…`, 5);
+    plan = await generateVideoPlan({ topic, context, targetSeconds, tone, language, codeSwitch });
+  }
+  ctx.setPlan(plan);
+  const n = plan.scenes.length;
+  ctx.emit('planning', `Plan ready: "${plan.title}" — ${n} scenes`, 12);
+
+  // 2. Voice track + per-scene visual durations + caption timing.
+  // captionCues is the editable source of truth saved to the project doc.
+  let master, captionsPath = null, durations, captionCues = null;
+  if (bilingual) {
+    // Each scene line spoken in language A then language B (own voice/engine each).
+    ctx.emit('voice', `Recording ${language} lines…`, 14);
+    const resA = await synthesizeMany({
+      items: plan.scenes.map((sc) => ({ id: sc.index, text: sc.narration, outBase: `${id}_s${sc.index}_a` })),
+      voice, rate,
+    });
+    ctx.emit('voice', `Recording ${language2} lines…`, 17);
+    const resB = await synthesizeMany({
+      items: plan.scenes.map((sc) => ({ id: sc.index, text: sc.narration2, outBase: `${id}_s${sc.index}_b` })),
+      voice: voice2, rate,
+    });
+
+    const lines = [];
+    durations = [];
+    for (let i = 0; i < n; i++) {
+      const sc = plan.scenes[i];
+      const tailGap = i === n - 1 ? 0.2 : GAP_BETWEEN_SCENES;
+      lines.push({ audioPath: resA[i].audioPath, text: subtitles ? sc.narration : '', gapAfter: GAP_BETWEEN_LANGS });
+      lines.push({ audioPath: resB[i].audioPath, text: subtitles ? sc.narration2 : '', gapAfter: tailGap });
+      durations.push(resA[i].duration + GAP_BETWEEN_LANGS + resB[i].duration + tailGap);
+    }
+    const track = await assembleVoiceTrack({ lines, outBase: `${id}_vo` });
+    master = { audioPath: track.path, duration: track.duration };
+    // Karaoke captions from each line's exact spoken window (both languages).
+    if (subtitles && track.cues.length) {
+      captionCues = track.cues;
+      captionsPath = buildKaraokeAss({
+        cues: track.cues, aspect, style: captionStyle,
+        assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
+      });
+    }
+  } else {
+    // ONE flowing narration for the whole video (single utterance → no choppy seams).
+    ctx.emit('voice', `Recording one continuous ${language} narration…`, 16);
+    const sceneTexts = buildSceneTexts(plan);
+    const fullText = sceneTexts.join(' ');
+    const m = await synthesizeVoice({
+      text: fullText, voice, rate, outBase: `${id}_vo`,
+      onProgress: (n, total) => total > 1 &&
+        ctx.emit('voice', `Recording ${language} narration… (${n}/${total} chunks)`, 16),
+    });
+    master = { audioPath: m.audioPath, duration: m.duration };
+    if (subtitles) {
+      const assPath = path.join(config.dirs.audio, `${id}_vo.ass`);
+      // Prefer real timing windows: YarnGPT returns per-chunk cues from the
+      // measured audio; edge gives a word-timed SRT. Only fall back to a
+      // proportional spread when neither is available.
+      const cues = m.cues?.length
+        ? m.cues
+        : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
+      captionCues = cues && cues.length ? cues : null;
+      captionsPath = cues && cues.length
+        ? buildKaraokeAss({ cues, aspect, assPath, style: captionStyle })
+        : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath, style: captionStyle });
+    }
+    durations = allocateDurations(sceneTexts, m.duration);
+  }
+  const masterDur = master.duration;
+
+  // 2a. Per-phrase B-roll (#7): split long scenes into short shots so the
+  // picture changes more often. Single-narration path only (bilingual pacing
+  // is bound to its two-read scene structure). Captions are global, so this
+  // only affects which clip shows when. Beat-sync then snaps every shot cut.
+  let visualScenes = plan.scenes;
+  if (!bilingual && bRoll && durations.length) {
+    const exp = expandScenes(plan.scenes, durations, { maxShot: config.maxShotSeconds });
+    visualScenes = exp.scenes;
+    durations = exp.durations;
+    if (visualScenes.length > plan.scenes.length) {
+      ctx.emit('editing', `Cutting ${plan.scenes.length} scenes into ${visualScenes.length} shots…`, 13);
+    }
+  }
+
+  // 2b. Background music: explicit upload wins; else auto-fetch from Jamendo.
+  // Fetched BEFORE footage so beat-sync can land scene cuts on the music.
+  let bgMusic = bgMusicPath || null;
+  let musicMeta = null;
+  if (!bgMusic && wantMusic) {
+    ctx.emit('render', 'Finding background music…', 13);
+    const picked = await autoMusic({ tone, minSeconds: masterDur, base: id });
+    if (picked) { bgMusic = picked.path; musicMeta = picked.meta; }
+  }
+
+  // 2c. Beat-sync: snap each scene CUT onto the music's beat grid so the
+  // picture changes on the beat (CapCut's signature feel). Only on the single
+  // flowing-narration path; bilingual pacing is driven by its two reads. Any
+  // failure (no ffmpeg, silent track) falls back to the proportional cuts.
+  let beat = null;
+  if (beatSync && bgMusic && !bilingual && durations.length > 1) {
+    try {
+      const tempo = await detectTempo(bgMusic);
+      if (tempo.bpm >= 60 && tempo.bpm <= 200) {
+        const grid = beatGrid(tempo.bpm, masterDur, tempo.offset);
+        const snapped = snapToBeats(durations, grid);
+        beat = { bpm: tempo.bpm, offset: tempo.offset };
+        durations = snapped;
+        ctx.emit('render', `Syncing cuts to ${Math.round(tempo.bpm)} BPM…`, 15);
+      }
+    } catch { /* keep proportional cuts */ }
+  }
+
+  // 3+4. Footage + normalize per scene, with bounded concurrency (overlaps
+  // network downloads with GPU encodes). One bad download can't kill the render.
+  let done = 0;
+  const vn = visualScenes.length;
+  // Shared across every scene of THIS render so no clip is reused — kills the
+  // repeated-footage problem when different scenes' queries overlap (and gives
+  // each B-roll shot of one scene distinct footage → a mini montage).
+  const usedClips = new Set();
+  // Clips used by PAST renders, so the ranker can avoid repeating footage across
+  // renders too; the keys actually used here are appended back at the end.
+  const recentClips = loadRecentClips();
+  const renderedKeys = [];
+  const sceneFiles = await mapLimit(visualScenes, 3, async (scene, i) => {
+    const base = `${id}_s${scene.index}`;
+    // Rotate the lead provider scene-to-scene across EVERY enabled source so
+    // footage draws equally from Pexels, Pixabay and (when on) YouTube instead
+    // of always topping out on Pexels.
+    const lead = sources[i % sources.length];
+    const minDur = durations[i]; // prefer a clip that covers the scene without looping
+    let acquired = await acquireFootage({
+      queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips,
+      onAttempt: (q, clip) =>
+        ctx.emit('footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / vn) * 55)),
+    });
+    if (!acquired) {
+      const alts = await suggestAlternativeQueries(scene.query, context);
+      acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips });
+    }
+    // Last resort: a branded text card so ONE dead query can never kill the
+    // whole render (#6). The card shows a short phrase from the narration.
+    if (!acquired) {
+      const card = { narration: scene.narration, query: scene.query };
+      const norm = await makeTextCard({
+        narration: card.narration, query: card.query, outBase: base,
+        aspect, targetDur: durations[i] + xfadeDur, index: i, brand,
+      });
+      scene.usedQuery = scene.query;
+      scene.provider = 'card';
+      done += 1;
+      ctx.emit('editing', `Shot ${scene.index}/${vn}: generated card (no footage found)`, 20 + Math.round((done / vn) * 55));
+      return { norm, source: null, card };
+    }
+    scene.usedQuery = acquired.usedQuery;
+    scene.provider = acquired.clip.provider;
+    renderedKeys.push(clipKey(acquired.clip)); // remember it so later renders pick fresh footage
+
+    const norm = await normalizeClip({
+      input: acquired.path, outBase: base, aspect, targetDur: durations[i] + xfadeDur, motion, index: i,
+    });
+    done += 1;
+    ctx.emit('editing', `Shot ${scene.index}/${vn} ready (${acquired.clip.provider})`, 20 + Math.round((done / vn) * 55));
+    // Keep both paths: the normalized clip feeds the concat now, the raw
+    // source survives for re-edits (re-trim / re-frame) from the project doc.
+    return { norm, source: acquired.path };
+  });
+  // Persist the clips this render used so the next render avoids repeating them.
+  recordUsedClips(renderedKeys);
+
+  // 4b. Brand intro/outro bookends (#10): branded cards before/after the
+  // content, with the voice timeline padded by matching silence so everything
+  // still renders in one pass. Single-narration path only.
+  const sf = sceneFiles.slice();      // [{ norm, source, card }]
+  const vis = visualScenes.slice();
+  const durs = durations.slice();
+  let voiceAudio = master.audioPath;
+  let voiceDur = masterDur;
+  let cues = captionCues;
+  const canBookend = !bilingual;
+  const introSec = canBookend && brand.intro.enabled ? brand.intro.seconds : 0;
+  const outroSec = canBookend && brand.outro.enabled ? brand.outro.seconds : 0;
+  if (introSec || outroSec) {
+    const maxIdx = Math.max(0, ...vis.map((s) => Number(s.index) || 0));
+    if (introSec) {
+      const txt = brand.intro.text || brand.name || plan.title || '';
+      const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_intro`, aspect, targetDur: introSec + xfadeDur, index: 0, brand });
+      sf.unshift({ norm, source: null, card: { narration: txt, query: '' } });
+      vis.unshift({ index: maxIdx + 1, narration: txt, query: '' });
+      durs.unshift(introSec);
+    }
+    if (outroSec) {
+      const txt = brand.outro.text || brand.name || '';
+      const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_outro`, aspect, targetDur: outroSec + xfadeDur, index: 1, brand });
+      sf.push({ norm, source: null, card: { narration: txt, query: '' } });
+      vis.push({ index: maxIdx + 2, narration: txt, query: '' });
+      durs.push(outroSec);
+    }
+    // Pad the voice with leading/trailing silence and shift caption cues so
+    // they still line up with the (now later-starting) narration.
+    voiceAudio = await padAudio({ input: master.audioPath, outBase: `${id}_vo`, lead: introSec, trail: outroSec });
+    voiceDur = masterDur + introSec + outroSec;
+    if (cues && introSec) cues = cues.map((c) => ({ ...c, start: c.start + introSec, end: c.end + introSec }));
+    if (subtitles && cues && cues.length) {
+      captionsPath = buildKaraokeAss({ cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`), style: captionStyle });
+    }
+  }
+
+  // 5. Stitch the silent scene clips: a hard-cut stream-copy (fast), or an
+  // xfade crossfade when a transition is chosen (#8).
+  ctx.emit('render', xfadeDur ? `Stitching scenes with ${transition}…` : 'Stitching scenes…', 80);
+  const normFiles = sf.map((r) => r.norm);
+  const silent = xfadeDur
+    ? await concatWithTransitions({ sceneFiles: normFiles, clipDurs: durs.map((d) => d + xfadeDur), outBase: id, transition, dur: xfadeDur })
+    : await concatSilent({ sceneFiles: normFiles, outBase: id });
+
+  // 7. Single final pass: narration + ducked music + subtitles + fades + logo
+  ctx.emit('render', 'Mixing audio and rendering final video…', 90);
+  const finalPath = await finalizeVideo({
+    silentVideo: silent, voiceAudio, captions: captionsPath,
+    bgMusic, aspect, fades, outName: `${id}_final.mp4`,
+    logo: brand.logoPath, logoPosition: brand.logoPosition, logoScale: brand.logoScale,
+  });
+
+  // 8. Persist the editable project document (the timeline behind this MP4).
+  // This is what an editor mutates and render.js re-renders incrementally.
+  const project = buildProject({
+    id, opts, plan, aspect, fps: 30,
+    language: bilingual ? `${language} + ${language2}` : language, bilingual,
+    brand,
+    voiceTrack: { path: voiceAudio, duration: voiceDur },
+    captions: { enabled: Boolean(subtitles && cues), cues: cues || [], style: captionStyle },
+    music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta, beat } : null,
+    scenes: vis.map((sc, i) => ({
+      index: sc.index, narration: sc.narration, query: sc.query,
+      usedQuery: sc.usedQuery, provider: sc.provider,
+      sourcePath: sf[i].source, clipPath: sf[i].norm,
+      card: sf[i].card || null,
+      duration: durs[i], motion,
+    })),
+  });
+  // Seed the render cache so the first edit only redoes what actually changed,
+  // not the whole video (the assets this run produced are already on disk).
+  const seeded = planRender(project);
+  project.render = {
+    scenes: seeded.hashes.scenes, concat: seeded.hashes.concat, final: seeded.hashes.final,
+    silentPath: silent, outputPath: finalPath, renderedAt: Date.now(),
+  };
+  saveProject(project);
+
+  ctx.emit('done', 'Render complete', 100);
+  return {
+    file: path.basename(finalPath),
+    path: finalPath,
+    projectId: id,
+    title: plan.title,
+    language: bilingual ? `${language} + ${language2}` : language,
+    bilingual,
+    music: musicMeta,
+    scenes: plan.scenes,
+  };
 }
 
 export function runPipeline(opts) {
-  const id = nanoid(10);
-  const job = {
-    id,
-    status: 'running',
-    createdAt: Date.now(),
-    opts,
-    log: [],
-    progress: { stage: 'init', message: 'Starting', pct: 0 },
-    result: null,
-    error: null,
-  };
-  jobs.set(id, job);
-
-  (async () => {
-    try {
-      const {
-        topic, script, context, aspect, targetSeconds, tone, voice, voice2, rate,
-        subtitles, bgMusicPath, fades, motion = true, autoMusic: wantMusic = false,
-        captionStyle = {}, codeSwitch = false, beatSync = true, bRoll = true,
-        transition = 'cut', useYouTube = false,
-      } = opts;
-      // Footage source pool. YouTube is opt-in (slower yt-dlp pull, gray-area
-      // licensing), so it only joins the pool when the creator asks for it.
-      const sources = useYouTube ? ['pexels', 'pixabay', 'youtube'] : ['pexels', 'pixabay'];
-      // Crossfade headroom: with transitions on, each scene clip is rendered this
-      // much longer so the xfade overlap nets back to the intended cut times.
-      const xfadeDur = transition && transition !== 'cut' ? config.transitionSeconds : 0;
-
-      // Brand kit (#10): one persisted identity applied to every video. Caption
-      // colours feed the karaoke style; card colours/intro/outro/logo are applied
-      // below. Brand intro/outro bookends are single-narration only.
-      const brand = loadBrand();
-      if (brand.captionPrimary && captionStyle.primary == null) captionStyle.primary = hexToAss(brand.captionPrimary);
-      if (brand.captionSecondary && captionStyle.secondary == null) captionStyle.secondary = hexToAss(brand.captionSecondary);
-      const orientation = orientationFor(aspect);
-      const language = getVoice(voice)?.lang || 'English';
-      const hasScript = Boolean(script && script.trim());
-      const bilingual = Boolean(voice2 && getVoice(voice2));
-      const language2 = bilingual ? getVoice(voice2).lang : null;
-
-      // 1. Plan — four combinations of {topic|script} × {single|bilingual}.
-      let plan;
-      if (bilingual && hasScript) {
-        emit(job, 'planning', `Localizing your script into ${language} + ${language2}…`, 5);
-        plan = await planBilingualFromScript({ script, context, language, language2 });
-      } else if (bilingual) {
-        emit(job, 'planning', `Writing a bilingual script (${language} + ${language2})…`, 5);
-        plan = await generateBilingualPlan({ topic, context, targetSeconds, tone, language, language2 });
-      } else if (hasScript) {
-        emit(job, 'planning', 'Planning visuals for your script…', 5);
-        plan = await planFromScript({ script, context, language });
-      } else {
-        emit(job, 'planning', `Writing the script with Grok (${language})…`, 5);
-        plan = await generateVideoPlan({ topic, context, targetSeconds, tone, language, codeSwitch });
-      }
-      job.plan = plan;
-      const n = plan.scenes.length;
-      emit(job, 'planning', `Plan ready: "${plan.title}" — ${n} scenes`, 12);
-
-      // 2. Voice track + per-scene visual durations + caption timing.
-      // captionCues is the editable source of truth saved to the project doc.
-      let master, captionsPath = null, durations, captionCues = null;
-      if (bilingual) {
-        // Each scene line spoken in language A then language B (own voice/engine each).
-        emit(job, 'voice', `Recording ${language} lines…`, 14);
-        const resA = await synthesizeMany({
-          items: plan.scenes.map((sc) => ({ id: sc.index, text: sc.narration, outBase: `${id}_s${sc.index}_a` })),
-          voice, rate,
-        });
-        emit(job, 'voice', `Recording ${language2} lines…`, 17);
-        const resB = await synthesizeMany({
-          items: plan.scenes.map((sc) => ({ id: sc.index, text: sc.narration2, outBase: `${id}_s${sc.index}_b` })),
-          voice: voice2, rate,
-        });
-
-        const lines = [];
-        durations = [];
-        for (let i = 0; i < n; i++) {
-          const sc = plan.scenes[i];
-          const tailGap = i === n - 1 ? 0.2 : GAP_BETWEEN_SCENES;
-          lines.push({ audioPath: resA[i].audioPath, text: subtitles ? sc.narration : '', gapAfter: GAP_BETWEEN_LANGS });
-          lines.push({ audioPath: resB[i].audioPath, text: subtitles ? sc.narration2 : '', gapAfter: tailGap });
-          durations.push(resA[i].duration + GAP_BETWEEN_LANGS + resB[i].duration + tailGap);
-        }
-        const track = await assembleVoiceTrack({ lines, outBase: `${id}_vo` });
-        master = { audioPath: track.path, duration: track.duration };
-        // Karaoke captions from each line's exact spoken window (both languages).
-        if (subtitles && track.cues.length) {
-          captionCues = track.cues;
-          captionsPath = buildKaraokeAss({
-            cues: track.cues, aspect, style: captionStyle,
-            assPath: path.join(config.dirs.audio, `${id}_vo.ass`),
-          });
-        }
-      } else {
-        // ONE flowing narration for the whole video (single utterance → no choppy seams).
-        emit(job, 'voice', `Recording one continuous ${language} narration…`, 16);
-        const sceneTexts = buildSceneTexts(plan);
-        const fullText = sceneTexts.join(' ');
-        const m = await synthesizeVoice({
-          text: fullText, voice, rate, outBase: `${id}_vo`,
-          onProgress: (n, total) => total > 1 &&
-            emit(job, 'voice', `Recording ${language} narration… (${n}/${total} chunks)`, 16),
-        });
-        master = { audioPath: m.audioPath, duration: m.duration };
-        if (subtitles) {
-          const assPath = path.join(config.dirs.audio, `${id}_vo.ass`);
-          // Prefer real timing windows: YarnGPT returns per-chunk cues from the
-          // measured audio; edge gives a word-timed SRT. Only fall back to a
-          // proportional spread when neither is available.
-          const cues = m.cues?.length
-            ? m.cues
-            : (m.srtPath && fs.existsSync(m.srtPath) ? parseSrt(fs.readFileSync(m.srtPath, 'utf8')) : null);
-          captionCues = cues && cues.length ? cues : null;
-          captionsPath = cues && cues.length
-            ? buildKaraokeAss({ cues, aspect, assPath, style: captionStyle })
-            : buildKaraokeAss({ text: fullText, duration: m.duration, aspect, assPath, style: captionStyle });
-        }
-        durations = allocateDurations(sceneTexts, m.duration);
-      }
-      const masterDur = master.duration;
-
-      // 2a. Per-phrase B-roll (#7): split long scenes into short shots so the
-      // picture changes more often. Single-narration path only (bilingual pacing
-      // is bound to its two-read scene structure). Captions are global, so this
-      // only affects which clip shows when. Beat-sync then snaps every shot cut.
-      let visualScenes = plan.scenes;
-      if (!bilingual && bRoll && durations.length) {
-        const exp = expandScenes(plan.scenes, durations, { maxShot: config.maxShotSeconds });
-        visualScenes = exp.scenes;
-        durations = exp.durations;
-        if (visualScenes.length > plan.scenes.length) {
-          emit(job, 'editing', `Cutting ${plan.scenes.length} scenes into ${visualScenes.length} shots…`, 13);
-        }
-      }
-
-      // 2b. Background music: explicit upload wins; else auto-fetch from Jamendo.
-      // Fetched BEFORE footage so beat-sync can land scene cuts on the music.
-      let bgMusic = bgMusicPath || null;
-      let musicMeta = null;
-      if (!bgMusic && wantMusic) {
-        emit(job, 'render', 'Finding background music…', 13);
-        const picked = await autoMusic({ tone, minSeconds: masterDur, base: id });
-        if (picked) { bgMusic = picked.path; musicMeta = picked.meta; }
-      }
-
-      // 2c. Beat-sync: snap each scene CUT onto the music's beat grid so the
-      // picture changes on the beat (CapCut's signature feel). Only on the single
-      // flowing-narration path; bilingual pacing is driven by its two reads. Any
-      // failure (no ffmpeg, silent track) falls back to the proportional cuts.
-      let beat = null;
-      if (beatSync && bgMusic && !bilingual && durations.length > 1) {
-        try {
-          const tempo = await detectTempo(bgMusic);
-          if (tempo.bpm >= 60 && tempo.bpm <= 200) {
-            const grid = beatGrid(tempo.bpm, masterDur, tempo.offset);
-            const snapped = snapToBeats(durations, grid);
-            beat = { bpm: tempo.bpm, offset: tempo.offset };
-            durations = snapped;
-            emit(job, 'render', `Syncing cuts to ${Math.round(tempo.bpm)} BPM…`, 15);
-          }
-        } catch { /* keep proportional cuts */ }
-      }
-
-      // 3+4. Footage + normalize per scene, with bounded concurrency (overlaps
-      // network downloads with GPU encodes). One bad download can't kill the render.
-      let done = 0;
-      const vn = visualScenes.length;
-      // Shared across every scene of THIS render so no clip is reused — kills the
-      // repeated-footage problem when different scenes' queries overlap (and gives
-      // each B-roll shot of one scene distinct footage → a mini montage).
-      const usedClips = new Set();
-      // Clips used by PAST renders, so the ranker can avoid repeating footage across
-      // renders too; the keys actually used here are appended back at the end.
-      const recentClips = loadRecentClips();
-      const renderedKeys = [];
-      const sceneFiles = await mapLimit(visualScenes, 3, async (scene, i) => {
-        const base = `${id}_s${scene.index}`;
-        // Rotate the lead provider scene-to-scene across EVERY enabled source so
-        // footage draws equally from Pexels, Pixabay and (when on) YouTube instead
-        // of always topping out on Pexels.
-        const lead = sources[i % sources.length];
-        const minDur = durations[i]; // prefer a clip that covers the scene without looping
-        let acquired = await acquireFootage({
-          queries: localizeQuery(scene.query, context), orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips,
-          onAttempt: (q, clip) =>
-            emit(job, 'footage', `Scene ${scene.index}: trying ${clip.provider} clip for "${q}"…`, 20 + Math.round((done / vn) * 55)),
-        });
-        if (!acquired) {
-          const alts = await suggestAlternativeQueries(scene.query, context);
-          acquired = await acquireFootage({ queries: alts, orientation, base, used: usedClips, lead, minDur, sources, recent: recentClips });
-        }
-        // Last resort: a branded text card so ONE dead query can never kill the
-        // whole render (#6). The card shows a short phrase from the narration.
-        if (!acquired) {
-          const card = { narration: scene.narration, query: scene.query };
-          const norm = await makeTextCard({
-            narration: card.narration, query: card.query, outBase: base,
-            aspect, targetDur: durations[i] + xfadeDur, index: i, brand,
-          });
-          scene.usedQuery = scene.query;
-          scene.provider = 'card';
-          done += 1;
-          emit(job, 'editing', `Shot ${scene.index}/${vn}: generated card (no footage found)`, 20 + Math.round((done / vn) * 55));
-          return { norm, source: null, card };
-        }
-        scene.usedQuery = acquired.usedQuery;
-        scene.provider = acquired.clip.provider;
-        renderedKeys.push(clipKey(acquired.clip)); // remember it so later renders pick fresh footage
-
-        const norm = await normalizeClip({
-          input: acquired.path, outBase: base, aspect, targetDur: durations[i] + xfadeDur, motion, index: i,
-        });
-        done += 1;
-        emit(job, 'editing', `Shot ${scene.index}/${vn} ready (${acquired.clip.provider})`, 20 + Math.round((done / vn) * 55));
-        // Keep both paths: the normalized clip feeds the concat now, the raw
-        // source survives for re-edits (re-trim / re-frame) from the project doc.
-        return { norm, source: acquired.path };
-      });
-      // Persist the clips this render used so the next render avoids repeating them.
-      recordUsedClips(renderedKeys);
-
-      // 4b. Brand intro/outro bookends (#10): branded cards before/after the
-      // content, with the voice timeline padded by matching silence so everything
-      // still renders in one pass. Single-narration path only.
-      const sf = sceneFiles.slice();      // [{ norm, source, card }]
-      const vis = visualScenes.slice();
-      const durs = durations.slice();
-      let voiceAudio = master.audioPath;
-      let voiceDur = masterDur;
-      let cues = captionCues;
-      const canBookend = !bilingual;
-      const introSec = canBookend && brand.intro.enabled ? brand.intro.seconds : 0;
-      const outroSec = canBookend && brand.outro.enabled ? brand.outro.seconds : 0;
-      if (introSec || outroSec) {
-        const maxIdx = Math.max(0, ...vis.map((s) => Number(s.index) || 0));
-        if (introSec) {
-          const txt = brand.intro.text || brand.name || plan.title || '';
-          const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_intro`, aspect, targetDur: introSec + xfadeDur, index: 0, brand });
-          sf.unshift({ norm, source: null, card: { narration: txt, query: '' } });
-          vis.unshift({ index: maxIdx + 1, narration: txt, query: '' });
-          durs.unshift(introSec);
-        }
-        if (outroSec) {
-          const txt = brand.outro.text || brand.name || '';
-          const norm = await makeTextCard({ narration: txt, query: '', outBase: `${id}_outro`, aspect, targetDur: outroSec + xfadeDur, index: 1, brand });
-          sf.push({ norm, source: null, card: { narration: txt, query: '' } });
-          vis.push({ index: maxIdx + 2, narration: txt, query: '' });
-          durs.push(outroSec);
-        }
-        // Pad the voice with leading/trailing silence and shift caption cues so
-        // they still line up with the (now later-starting) narration.
-        voiceAudio = await padAudio({ input: master.audioPath, outBase: `${id}_vo`, lead: introSec, trail: outroSec });
-        voiceDur = masterDur + introSec + outroSec;
-        if (cues && introSec) cues = cues.map((c) => ({ ...c, start: c.start + introSec, end: c.end + introSec }));
-        if (subtitles && cues && cues.length) {
-          captionsPath = buildKaraokeAss({ cues, aspect, assPath: path.join(config.dirs.audio, `${id}_vo.ass`), style: captionStyle });
-        }
-      }
-
-      // 5. Stitch the silent scene clips: a hard-cut stream-copy (fast), or an
-      // xfade crossfade when a transition is chosen (#8).
-      emit(job, 'render', xfadeDur ? `Stitching scenes with ${transition}…` : 'Stitching scenes…', 80);
-      const normFiles = sf.map((r) => r.norm);
-      const silent = xfadeDur
-        ? await concatWithTransitions({ sceneFiles: normFiles, clipDurs: durs.map((d) => d + xfadeDur), outBase: id, transition, dur: xfadeDur })
-        : await concatSilent({ sceneFiles: normFiles, outBase: id });
-
-      // 7. Single final pass: narration + ducked music + subtitles + fades + logo
-      emit(job, 'render', 'Mixing audio and rendering final video…', 90);
-      const finalPath = await finalizeVideo({
-        silentVideo: silent, voiceAudio, captions: captionsPath,
-        bgMusic, aspect, fades, outName: `${id}_final.mp4`,
-        logo: brand.logoPath, logoPosition: brand.logoPosition, logoScale: brand.logoScale,
-      });
-
-      // 8. Persist the editable project document (the timeline behind this MP4).
-      // This is what an editor mutates and render.js re-renders incrementally.
-      const project = buildProject({
-        id, opts, plan, aspect, fps: 30,
-        language: bilingual ? `${language} + ${language2}` : language, bilingual,
-        brand,
-        voiceTrack: { path: voiceAudio, duration: voiceDur },
-        captions: { enabled: Boolean(subtitles && cues), cues: cues || [], style: captionStyle },
-        music: bgMusic ? { path: bgMusic, volume: 0.12, meta: musicMeta, beat } : null,
-        scenes: vis.map((sc, i) => ({
-          index: sc.index, narration: sc.narration, query: sc.query,
-          usedQuery: sc.usedQuery, provider: sc.provider,
-          sourcePath: sf[i].source, clipPath: sf[i].norm,
-          card: sf[i].card || null,
-          duration: durs[i], motion,
-        })),
-      });
-      // Seed the render cache so the first edit only redoes what actually changed,
-      // not the whole video (the assets this run produced are already on disk).
-      const seeded = planRender(project);
-      project.render = {
-        scenes: seeded.hashes.scenes, concat: seeded.hashes.concat, final: seeded.hashes.final,
-        silentPath: silent, outputPath: finalPath, renderedAt: Date.now(),
-      };
-      saveProject(project);
-
-      job.result = {
-        file: path.basename(finalPath),
-        path: finalPath,
-        projectId: id,
-        title: plan.title,
-        language: bilingual ? `${language} + ${language2}` : language,
-        bilingual,
-        music: musicMeta,
-        scenes: plan.scenes,
-      };
-      job.status = 'done';
-      emit(job, 'done', 'Render complete', 100);
-    } catch (err) {
-      job.status = 'error';
-      job.error = err.message;
-      emit(job, 'error', err.message, job.progress.pct);
-    }
-  })();
-
-  return id;
+  return runMemory({ kind: 'render', processor: processRender, args: opts, startMessage: 'Starting', startPct: 0 });
 }

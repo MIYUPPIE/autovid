@@ -6,10 +6,12 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "worker": "node src/worker.js",
     "dev": "node --watch src/server.js",
     "check": "node src/check-env.js",
     "test": "node --test test/gate.test.js test/project.test.js",
     "eval": "node test/eval.js",
+    "eval:queue": "node test/queue.smoke.js",
     "eval:yarn": "node test/yarn.smoke.js",
     "eval:render": "node test/render.smoke.js",
     "eval:edit": "node test/edit.smoke.js",
@@ -20,11 +22,13 @@
     "eval:youtube": "node test/youtube.smoke.js"
   },
   "dependencies": {
-    "express": "^4.19.2",
+    "bullmq": "^5.78.1",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "node-fetch": "^3.3.2",
-    "nanoid": "^5.0.7"
+    "express": "^4.19.2",
+    "ioredis": "^5.11.1",
+    "nanoid": "^5.0.7",
+    "node-fetch": "^3.3.2"
   },
   "engines": {
     "node": ">=18"

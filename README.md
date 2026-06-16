@@ -35,6 +35,7 @@ One continuous voiceover is synthesized for the whole video (not sentence-by-sen
   Verify: `edge-tts --list-voices | head`
 - **Native-language TTS (Yoruba/Igbo/Hausa)** — a [YarnGPT](https://yarngpt.ai) API key in `YARN_API_KEY`. No local GPU/model needed; the request is hosted. Verify: `npm run eval:yarn`.
 - **Auto music** — a free Jamendo client id in `JAMENDO_CLIENT_ID` (see API keys).
+- **Job queue (optional, recommended for a server)** — Redis, so renders survive a restart: `sudo apt install -y redis-server`, then set `REDIS_URL` in `.env`. Without it the app uses an in-memory queue (fine for one box; jobs lost on restart). See [Job queue](#job-queue-renders-survive-restarts).
 
 ## Setup
 ```bash
@@ -152,14 +153,50 @@ The link a post carries is the address you reached the app on. Set `SHARE_BASE_U
 
 > Future: a one-click cloud upload (S3/R2 + public URL) would make the per-network link buttons resolve for anyone, not just the same network. That's a hosting/credential choice, not built here.
 
+## Job queue (renders survive restarts)
+Renders, dubs and shorts are long jobs. There are two interchangeable backends; the active one shows in `/api/health` (`queue.backend`) and the startup banner.
+
+- **In-memory (default).** No setup. A job lives in the web process — fine for one box, but a job in flight is **lost if the process restarts**. Used automatically when `REDIS_URL` is empty.
+- **Redis + BullMQ (production).** Set `REDIS_URL` and every job is persisted in Redis. If the process dies mid-render the job is **not lost** — a worker re-runs it (BullMQ stalled-job recovery). This is the path for a real deployment.
+
+Both run the *same* pipeline code (`PROCESSORS` in `src/pipeline.js`); only where the job lives changes (`src/queue.js` vs the in-memory map). The `/api/job/:id` + SSE contract is identical across backends, so the browser doesn't change.
+
+```bash
+sudo apt install -y redis-server     # or: docker run -d -p 6379:6379 redis
+echo "REDIS_URL=redis://127.0.0.1:6379" >> .env
+npm run check                        # verifies Redis is reachable
+npm start                            # banner now shows: Queue: redis @ … (inline worker)
+```
+
+**Two ways to run the worker:**
+- **Single box (default):** `npm start` also runs a worker inside the web process. Nothing else to start. (`WORKER_INLINE=1`, the default.)
+- **Scale-out / isolation:** set `WORKER_INLINE=0` so the web server only *enqueues*, and run one or more dedicated workers next to it:
+  ```bash
+  npm run worker        # a separate process; web restarts never interrupt a render
+  ```
+  Run the worker on a GPU box and the web server anywhere; add more workers to render in parallel (`WORKER_CONCURRENCY` per worker).
+
+Tune via `.env`: `REDIS_URL`, `QUEUE_NAME`, `WORKER_CONCURRENCY` (jobs per worker; keep `1` on a single GPU), `WORKER_INLINE`, `JOB_POLL_MS`.
+
+`npm run eval:queue` proves the round-trip against a real Redis (enqueue → worker → status, including the "enqueued while no worker is running, then picked up" restart case). It **skips cleanly** when no Redis is reachable.
+
+### Deploy (VPS)
+Run the web server (and, if scaling out, the worker) under a process manager behind nginx. A `pm2` config is included:
+
+```bash
+npm i -g pm2
+pm2 start ecosystem.config.cjs           # web + worker (worker only acts when REDIS_URL is set)
+pm2 save && pm2 startup                   # survive reboots
+```
+Then put nginx in front of port 3000 and set `SHARE_BASE_URL` to your domain.
+
 ## Notes
 - Stock licenses: Pexels & Pixabay are free for commercial use, no attribution required. Keep records if your platform needs them.
 - If a scene query returns nothing, Grok is asked for alternative queries automatically.
-- Jobs are in-memory. For production scale, back `jobs` in `pipeline.js` with Redis and move outputs to object storage.
-- To deploy: run behind `pm2` or systemd, put nginx in front, point a domain at port 3000.
+- Outputs are local files in `assets/`. For multi-box scale, move them to object storage (S3/R2) so any worker/web node can serve them.
 
 ## Production hardening checklist (next steps)
-- [ ] Redis-backed job queue (BullMQ) so renders survive restarts
+- [x] Redis-backed job queue (BullMQ) so renders survive restarts
 - [ ] Per-clip caching by query hash to cut API calls
 - [ ] Upload finished MP4s to S3/R2 instead of local disk
 - [ ] Auth on the render endpoint
