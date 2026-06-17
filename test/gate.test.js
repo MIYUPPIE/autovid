@@ -9,7 +9,7 @@ import path from 'node:path';
 
 import { config, RESOLUTIONS } from '../src/config.js';
 import { allVoiceIds, isValidVoice, defaultVoice, getVoice, VOICES, edgeVoiceName } from '../src/voices.js';
-import { orientationFor, scoreCandidate, clipKey, localizeQuery, isYouTubeUrl, shuffle, rankProvider, roundRobin } from '../src/stock.js';
+import { orientationFor, scoreCandidate, clipKey, localizeQuery, isYouTubeUrl, shuffle, rankProvider, roundRobin, ytDlpDownloadArgs } from '../src/stock.js';
 import { loadRecentClips, recordUsedClips, clearClipHistory, MAX_HISTORY } from '../src/clip-history.js';
 import { parseJsonLoose, splitScriptIntoScenes, languageNote } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
@@ -858,6 +858,35 @@ test('stock: isYouTubeUrl recognizes watch/share/shorts/embed, rejects stock CDN
     '',
     null,
   ]) assert.ok(!isYouTubeUrl(u), `should NOT match: ${u}`);
+});
+
+test('stock: ytDlpDownloadArgs pulls hi-res merged video, never progressive-only 360p', () => {
+  const args = ytDlpDownloadArgs('https://youtu.be/x', '/tmp/clip.mp4', { sec: 10, maxHeight: 1080 });
+  const fmt = args[args.indexOf('-f') + 1];
+  // The selector must lead with separate video+audio (bv*+ba) so YouTube serves
+  // a real hi-res stream. The OLD bug led with `b[ext=mp4]` (progressive), which
+  // YouTube only offers at 360p — that produced the bad quality.
+  assert.ok(fmt.startsWith('bv*[height<=1080]+ba'), `merged video must lead: ${fmt}`);
+  assert.ok(!/^b\[ext=mp4\]/.test(fmt), 'must not lead with progressive-only mp4');
+  assert.ok(!/height<=720/.test(fmt), 'old 720p cap must be gone');
+  // A sort directive that prefers the highest resolution within the cap.
+  const sort = args[args.indexOf('-S') + 1];
+  assert.ok(/(^|,)res(,|$)/.test(sort), `must sort by resolution: ${sort}`);
+  assert.ok(/vcodec:h264/.test(sort), 'prefers h264 for a fast downstream encode');
+  // Merges to a single mp4 and trims only the head section we use.
+  assert.deepEqual([args[args.indexOf('--merge-output-format') + 1]], ['mp4']);
+  assert.equal(args[args.indexOf('--download-sections') + 1], '*0-10');
+});
+
+test('stock: ytDlpDownloadArgs honors a custom height cap and floors the section length', () => {
+  const lo = ytDlpDownloadArgs('https://youtu.be/x', '/tmp/c.mp4', { sec: 1, maxHeight: 720 });
+  assert.ok(lo[lo.indexOf('-f') + 1].startsWith('bv*[height<=720]+ba'), '720 cap applied');
+  // sec is floored to 5 so a tiny/empty value still yields a usable clip.
+  assert.equal(lo[lo.indexOf('--download-sections') + 1], '*0-5');
+  // Defaults when nothing passed: 1080 cap, 30s head.
+  const def = ytDlpDownloadArgs('https://youtu.be/x', '/tmp/c.mp4');
+  assert.ok(def[def.indexOf('-f') + 1].includes('height<=1080'));
+  assert.equal(def[def.indexOf('--download-sections') + 1], '*0-30');
 });
 
 test('stock: YouTube is used equally despite no width/height (round-robin, not score)', () => {

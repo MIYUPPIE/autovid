@@ -313,25 +313,49 @@ export async function downloadClip(url, filenameBase) {
 }
 
 /**
+ * Build the yt-dlp argv for a section download. Pure + exported so the format
+ * logic is unit-testable without spawning anything.
+ *
+ * QUALITY: the old string was `b[height<=720][ext=mp4]/…` — `b[ext=mp4]` means a
+ * PROGRESSIVE (pre-muxed) mp4, which YouTube only serves at 360p (itag 18). So
+ * every YouTube clip came out 360p regardless of what the source offered. Now we
+ * select separate hi-res video + audio (`bv*+ba`) capped at maxHeight and let
+ * yt-dlp merge them, with `-S` sorting to prefer the highest res ≤ cap and h264/
+ * aac/mp4 so the downstream ffmpeg stays a fast copy/no-extra-transcode path.
+ */
+export function ytDlpDownloadArgs(url, dest, { sec, maxHeight } = {}) {
+  const s = Math.max(5, Number(sec) || 30);
+  const h = Math.max(240, Number(maxHeight) || 1080);
+  return [
+    url,
+    // Prefer merged video+audio at the best resolution ≤ h; fall back to best
+    // single-file ≤ h, then absolute best. NEVER pin to progressive-only.
+    '-f', `bv*[height<=${h}]+ba/b[height<=${h}]/bv*+ba/b`,
+    // Within the picked set, prefer highest res, then fps, then h264/aac/mp4.
+    '-S', `res,fps,vcodec:h264,acodec:aac,ext:mp4`,
+    '--download-sections', `*0-${s}`, '--force-keyframes-at-cuts',
+    '--no-playlist', '--no-warnings', '--no-part',
+    '-N', '4',                         // parallel fragments → faster hi-res pulls
+    '--merge-output-format', 'mp4',
+    '-o', dest,
+  ];
+}
+
+/**
  * Download a short opening SECTION of a YouTube video as mp4 via yt-dlp. We only
  * ever use a few seconds of footage and trim later, so pulling just the head keeps
- * a 30-minute source to a ~2MB download. Caps at 720p (progressive, no muxing),
- * writes to the raw asset folder, returns the local path. Throws a real message on
- * failure (missing yt-dlp, geo-block, age-gate, timeout) so the caller can fall
- * through to the next candidate.
+ * a long source to a small download. Pulls up to config.youtubeMaxHeight (1080p
+ * by default), writes to the raw asset folder, returns the local path. Throws a
+ * real message on failure (missing yt-dlp, geo-block, age-gate, timeout) so the
+ * caller can fall through to the next candidate.
  */
 export async function downloadYouTube(url, filenameBase) {
   fs.mkdirSync(config.dirs.raw, { recursive: true });
   const dest = path.join(config.dirs.raw, `${filenameBase}.mp4`);
-  const sec = Math.max(5, config.youtubeSectionSeconds);
-  const args = [
-    url,
-    '-f', 'b[height<=720][ext=mp4]/bv[height<=720][ext=mp4]+ba/b[ext=mp4]/b',
-    '--download-sections', `*0-${sec}`, '--force-keyframes-at-cuts',
-    '--no-playlist', '--no-warnings', '--no-part',
-    '--merge-output-format', 'mp4',
-    '-o', dest,
-  ];
+  const args = ytDlpDownloadArgs(url, dest, {
+    sec: config.youtubeSectionSeconds,
+    maxHeight: config.youtubeMaxHeight,
+  });
   return new Promise((resolve, reject) => {
     let cp;
     try {

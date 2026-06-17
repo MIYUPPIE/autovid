@@ -71,6 +71,11 @@ export const config = {
   ytDlpBin: process.env.YTDLP_BIN || 'yt-dlp',
   // Seconds of footage to grab from the head of a YouTube video.
   youtubeSectionSeconds: parseInt(process.env.YOUTUBE_SECTION_SECONDS || '30', 10),
+  // Max source height to pull. Output tops out at 1080 (9:16 = 1080x1920), so a
+  // 1080p source needs no upscaling. The OLD format string forced progressive
+  // mp4, which YouTube only serves at 360p — that was the "bad quality". We now
+  // pull separate hi-res video + audio and merge, capped here.
+  youtubeMaxHeight: parseInt(process.env.YOUTUBE_MAX_HEIGHT || '1080', 10),
   // Hard timeout for one yt-dlp download so a stuck pull can't hang a render.
   youtubeDownloadTimeout: parseInt(process.env.YOUTUBE_DOWNLOAD_TIMEOUT_MS || '90000', 10),
   // Timeout for one yt-dlp search.
