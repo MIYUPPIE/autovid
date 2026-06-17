@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import fs from 'fs';
+import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
@@ -35,26 +36,47 @@ for (const [key, dir] of Object.entries(MEDIA_DIRS)) {
   app.use(`/media/${key}`, express.static(dir));
 }
 
-// --- Raw multipart music upload (no external dep) ---
-app.post('/api/music', express.raw({ type: '*/*', limit: '30mb' }), (req, res) => {
-  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file' });
-  const ext = (req.query.ext || 'mp3').toString().replace(/[^a-z0-9]/gi, '');
-  const name = `music_${Date.now()}.${ext}`;
-  const dest = path.join(config.dirs.work, name);
-  fs.writeFileSync(dest, req.body);
-  res.json({ path: dest });
-});
+// Stream a raw (application/octet-stream) upload straight to disk. The old
+// handlers used express.raw(), which buffers the WHOLE file into memory and
+// enforces a body-parser size cap — a multi-GB video blew past the 200mb limit
+// with PayloadTooLargeError. Piping req → file write stream has no size cap and
+// constant memory use, so arbitrarily large videos upload fine. The browser
+// sends the file body raw; express.json() ignores octet-stream so the stream is
+// still readable here. Returns { path, bytes }.
+function streamUpload(getDir, prefix, fallbackExt) {
+  return (req, res) => {
+    // Resolve the dir per-request so config.dirs reassignment (tests, runtime
+    // config) is honored — matches the old express.raw handlers' behavior.
+    const dir = typeof getDir === 'function' ? getDir() : getDir;
+    fs.mkdirSync(dir, { recursive: true });
+    const ext = (req.query.ext || fallbackExt).toString().replace(/[^a-z0-9]/gi, '') || fallbackExt;
+    const dest = path.join(dir, `${prefix}_${Date.now()}_${randomUUID().slice(0, 8)}.${ext}`);
+    const out = fs.createWriteStream(dest);
+    const rm = () => { try { fs.unlinkSync(dest); } catch (_) {} };
+    let bytes = 0, done = false;
+    const fail = (code, msg) => {
+      if (done) return; done = true;
+      out.destroy(); rm();
+      if (!res.headersSent) res.status(code).json({ error: msg });
+    };
+    req.on('data', (c) => { bytes += c.length; });
+    req.on('aborted', () => { if (!done) { done = true; out.destroy(); rm(); } });
+    req.on('error', (e) => fail(500, e.message));
+    out.on('error', (e) => fail(500, e.message));
+    out.on('finish', () => {
+      if (done) return; done = true;
+      if (!bytes) { rm(); return res.status(400).json({ error: 'No file' }); }
+      res.json({ path: dest, bytes });
+    });
+    req.pipe(out);
+  };
+}
 
-// --- Raw video upload (footage replacement for the editor) ---
-app.post('/api/clip', express.raw({ type: '*/*', limit: '200mb' }), (req, res) => {
-  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file' });
-  const ext = (req.query.ext || 'mp4').toString().replace(/[^a-z0-9]/gi, '') || 'mp4';
-  const name = `clip_${Date.now()}.${ext}`;
-  const dest = path.join(config.dirs.raw, name);
-  fs.mkdirSync(config.dirs.raw, { recursive: true });
-  fs.writeFileSync(dest, req.body);
-  res.json({ path: dest });
-});
+// --- Music upload (auto-loop/duck under voice) ---
+app.post('/api/music', streamUpload(() => config.dirs.work, 'music', 'mp3'));
+
+// --- Video upload (shorts source, dub source, editor footage swap) ---
+app.post('/api/clip', streamUpload(() => config.dirs.raw, 'clip', 'mp4'));
 
 // --- Config / capabilities ---
 app.get('/api/voices', (req, res) => {
@@ -71,14 +93,7 @@ app.put('/api/brand', (req, res) => {
 });
 
 // Logo image upload for the brand kit. Returns the stored path to put in the brand.
-app.post('/api/logo', express.raw({ type: '*/*', limit: '8mb' }), (req, res) => {
-  if (!req.body || !req.body.length) return res.status(400).json({ error: 'No file' });
-  const ext = (req.query.ext || 'png').toString().replace(/[^a-z0-9]/gi, '') || 'png';
-  const dest = path.join(config.dirs.work, `logo_${Date.now()}.${ext}`);
-  fs.mkdirSync(config.dirs.work, { recursive: true });
-  fs.writeFileSync(dest, req.body);
-  res.json({ path: dest });
-});
+app.post('/api/logo', streamUpload(() => config.dirs.work, 'logo', 'png'));
 
 app.get('/api/health', async (req, res) => {
   res.json({

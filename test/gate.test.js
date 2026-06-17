@@ -1458,6 +1458,62 @@ test('http: POST /api/shorts requires a real videoPath', async () => {
   });
 });
 
+// ---------- streaming uploads (#PayloadTooLargeError fix) ----------
+test('http: POST /api/clip streams the body to disk and reports exact byte count', async () => {
+  await withServer(async (base) => {
+    const body = Buffer.alloc(5 * 1024 * 1024, 0x41); // 5 MB
+    const res = await fetch(`${base}/api/clip?ext=mp4`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body,
+    });
+    assert.equal(res.status, 200);
+    const d = await res.json();
+    assert.ok(d.path && fs.existsSync(d.path), 'file written to disk');
+    assert.equal(d.bytes, body.length, 'reported byte count matches sent body');
+    assert.equal(fs.statSync(d.path).size, body.length, 'on-disk size matches sent body');
+    assert.ok(d.path.endsWith('.mp4'));
+    fs.unlinkSync(d.path);
+  });
+});
+
+test('http: uploads have NO size cap — a body past the old express.raw limit still 200s', async () => {
+  await withServer(async (base) => {
+    // /api/logo used to cap at 8mb (express.raw). 10 MB would have thrown
+    // PayloadTooLargeError before the streaming rewrite. It must now succeed.
+    const body = Buffer.alloc(10 * 1024 * 1024, 0x42); // 10 MB > old 8mb cap
+    const res = await fetch(`${base}/api/logo?ext=png`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body,
+    });
+    assert.equal(res.status, 200, 'no PayloadTooLargeError');
+    const d = await res.json();
+    assert.equal(d.bytes, body.length);
+    assert.ok(fs.existsSync(d.path));
+    fs.unlinkSync(d.path);
+  });
+});
+
+test('http: POST /api/clip with an empty body returns 400 and writes no leftover file', async () => {
+  await withServer(async (base) => {
+    const res = await fetch(`${base}/api/clip?ext=mp4`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body: Buffer.alloc(0),
+    });
+    assert.equal(res.status, 400);
+    assert.equal((await res.json()).error, 'No file');
+  });
+});
+
+test('http: upload sanitizes the ext query and falls back when missing', async () => {
+  await withServer(async (base) => {
+    const body = Buffer.alloc(1024, 0x43);
+    const res = await fetch(`${base}/api/clip?ext=mp4;rm%20-rf`, {
+      method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body,
+    });
+    assert.equal(res.status, 200);
+    const d = await res.json();
+    assert.match(d.path, /\.mp4rmrf$/, 'non-alphanumerics stripped from ext');
+    fs.unlinkSync(d.path);
+  });
+});
+
 // ---------- editable project endpoints ----------
 function sampleProject(id) {
   const f = (n) => { const p = path.join(config.dirs.projects, n); fs.writeFileSync(p, 'x'); return p; };

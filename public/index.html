@@ -722,6 +722,7 @@
         <div id="musUpload" style="display:none">
           <label>Music file (mp3/wav, looped & ducked under voice)</label>
           <input type="file" id="musFile" accept="audio/*">
+          <div class="bar" id="musUpBar" style="display:none;margin-top:8px"><i></i></div>
           <div class="muted" id="musStatus"></div>
         </div>
         <div class="muted" id="musAutoNote" style="margin-top:8px">Mood is matched to your tone automatically.</div>
@@ -876,6 +877,7 @@
       <div class="muted">Upload any video — it's transcribed, translated, and re-narrated in the language you pick, over the original footage with karaoke captions.</div>
       <label style="margin-top:12px">Video file</label>
       <input type="file" id="dubFile" accept="video/*">
+      <div class="bar" id="dubUpBar" style="display:none;margin-top:8px"><i></i></div>
       <div class="muted" id="dubFileStatus"></div>
       <label>Dub into (voice / language)</label>
       <select id="dubVoice"></select>
@@ -900,6 +902,7 @@
       <div class="muted">Upload a long video — it's transcribed and the strongest moments are cut into captioned vertical clips, ready to post.</div>
       <label style="margin-top:12px">Video file</label>
       <input type="file" id="shoFile" accept="video/*">
+      <div class="bar" id="shoUpBar" style="display:none;margin-top:8px"><i></i></div>
       <div class="muted" id="shoFileStatus"></div>
       <label>How many shorts <span id="shoCountLbl">3</span></label>
       <input type="range" id="shoCount" min="1" max="8" step="1" value="3">
@@ -1057,14 +1060,9 @@ $('#len').addEventListener('input',e=>$('#lenLbl').textContent=e.target.value+'s
 // music upload
 $('#musFile').addEventListener('change',async e=>{
   const f=e.target.files[0]; if(!f)return;
-  $('#musStatus').textContent='Uploading…';
   const ext=(f.name.split('.').pop()||'mp3');
-  const buf=await f.arrayBuffer();
-  const r=await fetch('/api/music?ext='+ext,{method:'POST',
-    headers:{'Content-Type':'application/octet-stream'},body:buf});
-  const d=await r.json();
-  if(d.path){state.bgMusicPath=d.path;$('#musStatus').textContent='✓ '+f.name;}
-  else $('#musStatus').textContent='Upload failed';
+  const p=await uploadFile('/api/music?ext='+encodeURIComponent(ext),f,$('#musStatus'),$('#musUpBar'));
+  if(p) state.bgMusicPath=p;
 });
 
 // GO
@@ -1391,10 +1389,42 @@ let dubPath=null, shoPath=null;
 const segPick=(id,obj,key)=>E(id).addEventListener('click',e=>{const b=e.target.closest('button');if(!b)return;[...E(id).children].forEach(x=>x.classList.remove('on'));b.classList.add('on');obj[key]=b.dataset.v;});
 const dubState={aspect:''}, shoState={aspect:'9:16'};
 segPick('dubAspect',dubState,'aspect'); segPick('shoAspect',shoState,'aspect');
-async function uploadVideo(file,statusEl){
-  statusEl.textContent='Uploading…'; const ext=(file.name.split('.').pop()||'mp4'); const buf=await file.arrayBuffer();
-  const r=await fetch('/api/clip?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:buf});
-  const d=await r.json(); if(d.path){statusEl.textContent='✓ '+file.name; return d.path;} statusEl.textContent='Upload failed'; return null;
+const fmtMB=b=>b>=1073741824?(b/1073741824).toFixed(2)+' GB':b>=1048576?(b/1048576).toFixed(1)+' MB':Math.round(b/1024)+' KB';
+// Stream a File to the server via XHR. fetch() gives NO upload-progress events
+// and (with arrayBuffer) buffers the whole file in RAM first; XHR streams the
+// File directly and fires upload.onprogress, so large videos show a live bar.
+// Resolves with the parsed JSON response ({path,bytes} or {error}), or null.
+function xhrUpload(url,file,onProgress){
+  return new Promise(resolve=>{
+    const xhr=new XMLHttpRequest();
+    xhr.open('POST',url);
+    xhr.setRequestHeader('Content-Type','application/octet-stream');
+    if(onProgress) xhr.upload.onprogress=e=>onProgress(e.lengthComputable?e.loaded/e.total:null,e.loaded,e.total);
+    xhr.onload=()=>{ try{ resolve(JSON.parse(xhr.responseText)); }catch(_){ resolve(null); } };
+    xhr.onerror=()=>resolve(null);
+    xhr.onabort=()=>resolve(null);
+    xhr.send(file); // send the File itself — browser streams it; no arrayBuffer()
+  });
+}
+// Drive a status line + optional .bar fill while uploading a File to `url`.
+async function uploadFile(url,file,statusEl,barWrap){
+  const fill=barWrap?barWrap.querySelector('i'):null;
+  if(barWrap){ barWrap.style.display='block'; if(fill) fill.style.width='0%'; }
+  statusEl.textContent='Uploading… 0%';
+  const d=await xhrUpload(url,file,(frac,loaded,total)=>{
+    if(frac==null){ statusEl.textContent='Uploading… '+fmtMB(loaded); return; }
+    const pct=Math.round(frac*100);
+    statusEl.textContent='Uploading… '+pct+'%  ('+fmtMB(loaded)+' / '+fmtMB(total)+')';
+    if(fill) fill.style.width=pct+'%';
+  });
+  if(d&&d.path){ statusEl.textContent='✓ '+file.name+'  ('+fmtMB(d.bytes||file.size)+')'; if(fill) fill.style.width='100%'; return d.path; }
+  statusEl.textContent=d&&d.error?('Upload failed: '+d.error):'Upload failed';
+  if(barWrap) barWrap.style.display='none';
+  return null;
+}
+async function uploadVideo(file,statusEl,barWrap){
+  const ext=(file.name.split('.').pop()||'mp4');
+  return uploadFile('/api/clip?ext='+encodeURIComponent(ext),file,statusEl,barWrap);
 }
 E('openDub').addEventListener('click',()=>{
   // Populate the dub voice list from every group.
@@ -1403,7 +1433,7 @@ E('openDub').addEventListener('click',()=>{
   E('dubModal').classList.add('open');
 });
 E('dubClose').addEventListener('click',()=>E('dubModal').classList.remove('open'));
-E('dubFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) dubPath=await uploadVideo(f,E('dubFileStatus'));});
+E('dubFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) dubPath=await uploadVideo(f,E('dubFileStatus'),E('dubUpBar'));});
 E('dubGo').addEventListener('click',async ()=>{
   if(!dubPath){E('dubStatus').textContent='Upload a video first';return;}
   const body={videoPath:dubPath,voice:E('dubVoice').value,subtitles:true}; if(dubState.aspect) body.aspect=dubState.aspect;
@@ -1415,7 +1445,7 @@ E('dubGo').addEventListener('click',async ()=>{
 E('openShorts').addEventListener('click',()=>E('shortsModal').classList.add('open'));
 E('shoClose').addEventListener('click',()=>E('shortsModal').classList.remove('open'));
 E('shoCount').addEventListener('input',e=>E('shoCountLbl').textContent=e.target.value);
-E('shoFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) shoPath=await uploadVideo(f,E('shoFileStatus'));});
+E('shoFile').addEventListener('change',async e=>{const f=e.target.files[0]; if(f) shoPath=await uploadVideo(f,E('shoFileStatus'),E('shoUpBar'));});
 E('shoGo').addEventListener('click',async ()=>{
   if(!shoPath){E('shoStatus').textContent='Upload a video first';return;}
   const body={videoPath:shoPath,count:+E('shoCount').value,aspect:shoState.aspect};
@@ -1786,6 +1816,7 @@ function sceneInspector(s){
       </div>
       <button class="ghost" id="ispStockBrowse" style="width:100%;margin-top:8px;font-size:12px">⛶ Browse all clips${ytEnabled?' (incl. YouTube)':''}</button>
       <div class="stockgrid" id="ispStock"></div>
+      <div class="bar" id="ispSwapBar" style="display:none;margin-top:8px"><i></i></div>
       <div class="muted" id="ispSwapStatus" style="margin-top:6px"></div>
     </div>`;
 }
@@ -1906,14 +1937,9 @@ function addCueAtPlayhead(){
   proj.captions.enabled=true; syncToggles(); buildCues(); selectCue(proj.captions.cues.indexOf(cue));
 }
 async function replaceFootageFile(input){
-  const f=input.files[0]; if(!f)return; const st=E('ispSwapStatus'); st.textContent='Uploading…';
-  try{
-    const ext=(f.name.split('.').pop()||'mp4');
-    const r=await fetch('/api/clip?ext='+ext,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:await f.arrayBuffer()});
-    const d=await r.json();
-    if(d.path){ applyNewSource(d.path, '/media/raw/'+encodeURIComponent(d.path.split('/').pop())); st.textContent='✓ '+f.name; }
-    else st.textContent='Upload failed';
-  }catch(e){ st.textContent='Upload failed'; }
+  const f=input.files[0]; if(!f)return;
+  const p=await uploadVideo(f,E('ispSwapStatus'),E('ispSwapBar'));
+  if(p) applyNewSource(p, '/media/raw/'+encodeURIComponent(p.split('/').pop()));
 }
 // One clip cell. Stock (Pexels/Pixabay) previews inline as a muted <video> on
 // hover; YouTube has no direct file URL, so it shows its thumbnail with a ▶ badge.
