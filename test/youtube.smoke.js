@@ -2,6 +2,7 @@
 //   1. searchYouTube returns ranked candidates with id/url/thumb/duration
 //   2. downloadClip routes a YouTube watch URL through yt-dlp and writes a small,
 //      playable mp4 (a short head SECTION, not the whole video)
+//   3. the clip is HI-RES (≥720p) — guards the 360p-progressive quality bug
 // Self-skips if yt-dlp isn't installed or the network/video is unreachable.
 // Run: npm run eval:youtube
 import fs from 'node:fs';
@@ -13,11 +14,19 @@ import { searchYouTube, downloadClip, youtubeAvailable, isYouTubeUrl } from '../
 const execFileP = promisify(execFile);
 const skip = (msg) => { console.log(`SKIP: ${msg}`); process.exit(0); };
 
-async function probeDuration(file) {
+async function probeVideo(file) {
   const { stdout } = await execFileP('ffprobe', [
-    '-v', 'error', '-show_entries', 'format=duration', '-of', 'default=nw=1:nk=1', file,
+    '-v', 'error', '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height,codec_name', '-show_entries', 'format=duration',
+    '-of', 'default=nw=1', file,
   ], { timeout: 15000 });
-  return parseFloat(stdout.trim()) || 0;
+  const grab = (k) => (stdout.match(new RegExp(`^${k}=(.+)$`, 'm')) || [])[1];
+  return {
+    width: parseInt(grab('width'), 10) || 0,
+    height: parseInt(grab('height'), 10) || 0,
+    vcodec: grab('codec_name') || '',
+    duration: parseFloat(grab('duration')) || 0,
+  };
 }
 
 async function run() {
@@ -42,15 +51,21 @@ async function run() {
   }
   try {
     const { size } = fs.statSync(file);
-    const dur = await probeDuration(file);
-    console.log(`downloaded ${(size / 1e6).toFixed(2)}MB, ${dur.toFixed(1)}s → ${file}`);
+    const { width, height, vcodec, duration: dur } = await probeVideo(file);
+    console.log(`downloaded ${(size / 1e6).toFixed(2)}MB, ${dur.toFixed(1)}s, ${width}x${height} ${vcodec} → ${file}`);
     if (size < 16 * 1024) { console.error('FAIL: file too small (truncated)'); process.exit(1); }
     // Should be the head SECTION, not the whole (long) source.
     if (dur > config.youtubeSectionSeconds + 5) {
       console.error(`FAIL: got ${dur}s, expected ≤ ${config.youtubeSectionSeconds + 5}s section`); process.exit(1);
     }
     if (dur < 1) { console.error('FAIL: not a playable clip'); process.exit(1); }
-    console.log(`PASS: searched + downloaded a ${dur.toFixed(1)}s playable YouTube clip`);
+    // The quality guard: the old progressive-only selector capped every clip at
+    // 360p. A real hi-res pull must clear 720p (when the source offers it).
+    if (height < 720) {
+      console.error(`FAIL: ${height}p — quality regression (expected ≥720p hi-res, not 360p progressive)`);
+      process.exit(1);
+    }
+    console.log(`PASS: searched + downloaded a ${dur.toFixed(1)}s ${height}p playable YouTube clip`);
   } finally {
     try { fs.unlinkSync(file); } catch { /* already gone */ }
   }
