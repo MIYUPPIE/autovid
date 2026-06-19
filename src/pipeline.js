@@ -20,6 +20,7 @@ import { probeDuration } from './voice.js';
 import { transcribe, transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from './transcribe.js';
 import { translateForDub } from './dub.js';
 import { processAiVideo } from './ai-video.js';
+import { processLocalVideo } from './local-video-pipeline.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
 const GAP_BETWEEN_LANGS = 0.25;
@@ -92,6 +93,7 @@ export const PROCESSORS = {
   shorts: processShorts,
   'project-render': processProjectRender,
   'ai-video': processAiVideo,
+  'local-video': processLocalVideo,
 };
 
 /**
@@ -730,4 +732,9 @@ export function runPipeline(opts) {
 // 'ai-video' processor via PROCESSORS).
 export function runAiVideo(opts) {
   return runMemory({ kind: 'ai-video', processor: processAiVideo, args: opts, startMessage: 'Starting', startPct: 0 });
+}
+
+// In-memory wrapper for the free local-GPU video mode.
+export function runLocalVideo(opts) {
+  return runMemory({ kind: 'local-video', processor: processLocalVideo, args: opts, startMessage: 'Starting', startPct: 0 });
 }

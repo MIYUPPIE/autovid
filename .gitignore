@@ -6,3 +6,8 @@ assets/work/*
 assets/output/*
 assets/projects/*
 !assets/**/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+services/localvid/selftest_out.mp4

@@ -14,7 +14,7 @@ import { loadRecentClips, recordUsedClips, clearClipHistory, MAX_HISTORY } from 
 import { parseJsonLoose, splitScriptIntoScenes, languageNote } from '../src/xai.js';
 import { tagsForTone } from '../src/music.js';
 import { activeLlm, llmChat } from '../src/llm.js';
-import { buildProportionalSrt, chunkForYarn, yarnChunkTarget } from '../src/voice.js';
+import { buildProportionalSrt, chunkForYarn, yarnChunkTarget, explainYarnError, yarnFetch, verifyYarn } from '../src/voice.js';
 import {
   wordsFromTextProportional, wordsFromCues, groupIntoLines, parseSrt, buildKaraokeAss, wordWeight,
   captionScale, CAPTION_SIZES, captionAnimTag, CAPTION_ANIMS, hexToAss,
@@ -270,7 +270,7 @@ test('queue: defaults to the in-memory backend when no REDIS_URL', () => {
 });
 
 test('queue: PROCESSORS exposes exactly the job kinds the worker dispatches', () => {
-  assert.deepEqual(Object.keys(PROCESSORS).sort(), ['ai-video', 'dub', 'project-render', 'render', 'shorts']);
+  assert.deepEqual(Object.keys(PROCESSORS).sort(), ['ai-video', 'dub', 'local-video', 'project-render', 'render', 'shorts']);
   for (const fn of Object.values(PROCESSORS)) assert.equal(typeof fn, 'function');
 });
 
@@ -1894,4 +1894,104 @@ test('downloadToFile: rejects an oversized file up front via content-length', as
         /too large/,
       );
     });
+});
+
+// ── YarnGPT resilience (#) ───────────────────────────────────────────────────
+// A node-fetch-shaped fake response for the injected fetchImpl. `retryAfter` (s)
+// is exposed via headers.get like the real Response.
+function yarnRes(status, body = '', retryAfter = null) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    headers: { get: (h) => (h.toLowerCase() === 'retry-after' ? retryAfter : null) },
+    text: async () => body,
+    arrayBuffer: async () => new ArrayBuffer(0),
+  };
+}
+
+test('yarn: yarnFetch retries a transient 500 then succeeds', async () => {
+  let calls = 0, sleeps = 0;
+  const fetchImpl = async () => { calls += 1; return yarnRes(calls < 3 ? 500 : 200, 'ok'); };
+  const res = await yarnFetch('/tts', { method: 'POST' }, { fetchImpl, sleepImpl: async () => { sleeps += 1; }, retries: 3 });
+  assert.equal(res.status, 200);
+  assert.equal(calls, 3, '2 failures then success');
+  assert.equal(sleeps, 2, 'backed off before each retry');
+});
+
+test('yarn: yarnFetch returns the failing response after exhausting retries', async () => {
+  let calls = 0;
+  const res = await yarnFetch('/tts', {}, { fetchImpl: async () => { calls += 1; return yarnRes(500, 'boom'); }, sleepImpl: async () => {}, retries: 2 });
+  assert.equal(res.status, 500, 'caller turns the final 500 into an explained error');
+  assert.equal(calls, 3, '1 initial + 2 retries');
+});
+
+test('yarn: yarnFetch does not retry a non-transient status', async () => {
+  let calls = 0;
+  const res = await yarnFetch('/tts', {}, { fetchImpl: async () => { calls += 1; return yarnRes(401); }, sleepImpl: async () => {}, retries: 3 });
+  assert.equal(res.status, 401);
+  assert.equal(calls, 1, '401 is permanent — not retried');
+});
+
+test('yarn: yarnFetch retries a network error then succeeds', async () => {
+  let calls = 0, sleeps = 0;
+  const fetchImpl = async () => { calls += 1; if (calls < 2) throw new Error('ECONNRESET'); return yarnRes(200); };
+  const res = await yarnFetch('/tts', {}, { fetchImpl, sleepImpl: async () => { sleeps += 1; }, retries: 3 });
+  assert.equal(res.status, 200);
+  assert.equal(calls, 2);
+  assert.equal(sleeps, 1);
+});
+
+test('yarn: yarnFetch surfaces the network error after exhausting retries', async () => {
+  await assert.rejects(
+    () => yarnFetch('/tts', {}, { fetchImpl: async () => { throw new Error('ENOTFOUND'); }, sleepImpl: async () => {}, retries: 1 }),
+    /YarnGPT request failed \(network\): ENOTFOUND/,
+  );
+});
+
+test('yarn: yarnFetch honors Retry-After on a transient response', async () => {
+  let calls = 0, waited = -1;
+  const fetchImpl = async () => { calls += 1; return yarnRes(calls < 2 ? 503 : 200, '', '2'); };
+  await yarnFetch('/tts', {}, { fetchImpl, sleepImpl: async (ms) => { waited = ms; }, retries: 3 });
+  assert.equal(waited, 2000, 'Retry-After seconds → ms');
+});
+
+test('yarn: explainYarnError maps 500 to an actionable key/outage message', () => {
+  const m = explainYarnError(500, '{"detail":"An unexpected internal error occurred."}');
+  assert.match(m, /invalid\/expired\/revoked/);
+  assert.match(m, /yarngpt\.ai/);
+  assert.match(m, /outage/);
+});
+
+test('yarn: explainYarnError flags a 401 as a key-format problem', () => {
+  assert.match(explainYarnError(401, ''), /API key missing or wrong format/);
+});
+
+test('yarn: explainYarnError passes other statuses through with the body', () => {
+  assert.match(explainYarnError(429, 'slow down'), /YarnGPT 429 — slow down/);
+});
+
+test('yarn: verifyYarn classifies the zero-cost auth probe (422 ok, 401 bad-key, 500 down, network)', async () => {
+  const saved = config.yarnKey;
+  config.yarnKey = 'test-key';
+  try {
+    const ok = await verifyYarn({ fetchImpl: async () => yarnRes(422, '{"detail":"text required"}') });
+    assert.equal(ok.ok, true); assert.equal(ok.reason, 'ok');
+    const bad = await verifyYarn({ fetchImpl: async () => yarnRes(401, 'nope') });
+    assert.equal(bad.ok, false); assert.equal(bad.reason, 'bad-key');
+    const down = await verifyYarn({ fetchImpl: async () => yarnRes(500, 'boom') });
+    assert.equal(down.ok, false); assert.equal(down.reason, 'rejected-or-down');
+    const net = await verifyYarn({ fetchImpl: async () => { throw new Error('ENOTFOUND'); } });
+    assert.equal(net.ok, false); assert.equal(net.reason, 'network');
+  } finally { config.yarnKey = saved; }
+});
+
+test('yarn: verifyYarn reports no-key (and makes no request) when YARN_API_KEY is unset', async () => {
+  const saved = config.yarnKey;
+  config.yarnKey = '';
+  try {
+    let called = false;
+    const r = await verifyYarn({ fetchImpl: async () => { called = true; return yarnRes(200); } });
+    assert.equal(r.reason, 'no-key'); assert.equal(r.ok, false);
+    assert.equal(called, false, 'short-circuits before any network call');
+  } finally { config.yarnKey = saved; }
 });

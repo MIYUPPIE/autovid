@@ -110,37 +110,112 @@ async function mapLimit(items, limit, fn) {
   return out;
 }
 
-// One YarnGPT request → mp3 bytes on disk. Throws with a clear message on
-// auth/quota/network/timeout failure so the pipeline surfaces it.
-async function yarnRequest({ text, yarnVoice, outPath }) {
-  if (!config.yarnKey) throw new Error('YARN_API_KEY not set — required for Yoruba/Igbo/Hausa voices.');
-  const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), config.yarnTimeoutMs);
-  let res;
-  try {
-    res = await fetch(`${config.yarnBase}/tts`, {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text, voice: yarnVoice, response_format: 'mp3' }),
-      signal: ctrl.signal,
-      agent: pickAgent,
-    });
-  } catch (err) {
-    if (err.name === 'AbortError') {
-      throw new Error(`YarnGPT request timed out after ${Math.round(config.yarnTimeoutMs / 1000)}s.`);
-    }
-    throw new Error(`YarnGPT request failed (network): ${err.message}`);
-  } finally {
-    clearTimeout(timer);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// YarnGPT statuses worth retrying. Their server returns 500 ("An unexpected
+// internal error occurred.") on transient auth/db blips, plus the usual gateway
+// codes — a single 5xx must not kill a whole render, so we back off and retry.
+const YARN_TRANSIENT = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+// Turn YarnGPT's opaque HTTP errors into a message that says what to actually do.
+// Their auth layer 500s (instead of 401-ing) when a Bearer key is present but not
+// accepted, so a PERSISTENT 500 almost always means a bad/expired key, not a
+// payload problem — an empty body 500s the same way, so the request never reaches
+// validation. Exported for tests.
+export function explainYarnError(status, body = '') {
+  const detail = body.slice(0, 200).trim();
+  const tail = detail ? ` — ${detail}` : '';
+  if (status === 401) {
+    return `YarnGPT 401: API key missing or wrong format (must be "Bearer <key>"). Set a valid YARN_API_KEY from https://yarngpt.ai${tail}`;
   }
+  if (status === 500) {
+    return `YarnGPT 500 after retries: their server returns 500 (not 401) when the key is present but not accepted, so YARN_API_KEY is likely invalid/expired/revoked — verify or rotate it at https://yarngpt.ai. If the key is definitely valid, YarnGPT is having an outage; retry shortly${tail}`;
+  }
+  if (status >= 500) {
+    return `YarnGPT ${status} after retries — the service is having an outage. Retry shortly${tail}`;
+  }
+  return `YarnGPT ${status}${tail}`;
+}
+
+// One throttled, retrying call to the YarnGPT API. Retries transient 5xx/429 with
+// exponential backoff (honoring Retry-After), and aborts a stalled attempt at
+// yarnTimeoutMs. fetchImpl/sleepImpl are injected so the retry path is unit-tested
+// without real network or timers. Returns the node-fetch Response. Exported for tests.
+export async function yarnFetch(apiPath, init, { fetchImpl = fetch, sleepImpl = sleep, retries = config.yarnRetries } = {}) {
+  for (let attempt = 0; ; attempt++) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), config.yarnTimeoutMs);
+    let res;
+    try {
+      res = await fetchImpl(`${config.yarnBase}${apiPath}`, { ...init, signal: ctrl.signal, agent: pickAgent });
+    } catch (err) {
+      clearTimeout(timer);
+      const netErr = err.name === 'AbortError'
+        ? new Error(`YarnGPT request timed out after ${Math.round(config.yarnTimeoutMs / 1000)}s.`)
+        : new Error(`YarnGPT request failed (network): ${err.message}`);
+      if (attempt >= retries) throw netErr;
+      await sleepImpl(Math.min(15000, config.yarnBackoffMs * 2 ** attempt));
+      continue;
+    }
+    clearTimeout(timer);
+    if (res.ok || !YARN_TRANSIENT.has(res.status) || attempt >= retries) return res;
+    const retryAfter = Number(res.headers?.get?.('retry-after')) || 0;
+    const wait = retryAfter > 0 ? retryAfter * 1000 : Math.min(15000, config.yarnBackoffMs * 2 ** attempt);
+    await sleepImpl(wait);
+  }
+}
+
+// One YarnGPT request → mp3 bytes on disk. Throws with a clear, actionable message
+// on auth/quota/network/timeout failure so the pipeline surfaces it.
+async function yarnRequest({ text, yarnVoice, outPath, fetchImpl, sleepImpl } = {}) {
+  if (!config.yarnKey) throw new Error('YARN_API_KEY not set — required for Yoruba/Igbo/Hausa voices.');
+  const res = await yarnFetch('/tts', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, voice: yarnVoice, response_format: 'mp3' }),
+  }, { fetchImpl, sleepImpl });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`YarnGPT ${res.status} ${res.statusText}: ${body.slice(0, 200)}`);
+    throw new Error(explainYarnError(res.status, body));
   }
   const buf = Buffer.from(await res.arrayBuffer());
   if (buf.length < 256) throw new Error('YarnGPT returned an empty/too-small audio body.');
   fs.writeFileSync(outPath, buf);
   return outPath;
+}
+
+/**
+ * Probe the YarnGPT API with the configured key WITHOUT synthesizing audio: POST
+ * an empty body. Auth runs before body validation, so a valid key returns 422
+ * (missing text) while a rejected key 500s and a missing/misformatted key 401s.
+ * This is the only honest "will Yoruba/Igbo/Hausa actually work" signal — the
+ * mere presence of YARN_API_KEY says nothing. Returns { ok, status, reason,
+ * message }. Zero synthesis cost; no retries (callers want a fast verdict).
+ */
+export async function verifyYarn({ fetchImpl = fetch } = {}) {
+  if (!config.yarnKey) return { ok: false, status: 0, reason: 'no-key', message: 'YARN_API_KEY not set.' };
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), Math.min(15000, config.yarnTimeoutMs));
+  let res;
+  try {
+    res = await fetchImpl(`${config.yarnBase}/tts`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${config.yarnKey}`, 'Content-Type': 'application/json' },
+      body: '{}',
+      signal: ctrl.signal,
+      agent: pickAgent,
+    });
+  } catch (err) {
+    return { ok: false, status: 0, reason: 'network', message: `YarnGPT unreachable: ${err.message}` };
+  } finally {
+    clearTimeout(timer);
+  }
+  const s = res.status;
+  if (s === 422 || (s >= 200 && s < 300)) return { ok: true, status: s, reason: 'ok', message: 'YarnGPT key accepted.' };
+  const body = await res.text().catch(() => '');
+  if (s === 401) return { ok: false, status: s, reason: 'bad-key', message: explainYarnError(401, body) };
+  if (s >= 500) return { ok: false, status: s, reason: 'rejected-or-down', message: explainYarnError(s, body) };
+  return { ok: false, status: s, reason: 'unknown', message: explainYarnError(s, body) };
 }
 
 // Chars-per-chunk target: aim for ~yarnConcurrency sentence-aligned chunks so

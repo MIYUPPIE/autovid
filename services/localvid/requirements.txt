@@ -1,0 +1,17 @@
+# Local AI video (LTX-Video). Install into your GPU Python env (e.g. conda tf_gpu):
+#   conda activate tf_gpu
+#   pip install -r services/localvid/requirements.txt
+#
+# torch is assumed already present and matching your CUDA (this repo was set up on
+# torch 2.10.0+cu128). If importing transformers/diffusers fails with a
+# "libcudart.so.NN" error, your torchaudio was built for a different CUDA than
+# torch — reinstall it to match, e.g.:
+#   pip install --force-reinstall --no-deps torchaudio==<your-torch-version> \
+#     --index-url https://download.pytorch.org/whl/cu128
+diffusers>=0.32
+transformers
+accelerate
+imageio
+imageio-ffmpeg
+sentencepiece
+protobuf>=5.29.4,<7

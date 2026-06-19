@@ -6,11 +6,12 @@ import { randomUUID } from 'crypto';
 import { fileURLToPath } from 'url';
 import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
-import { ensureDirs, probeDuration } from './voice.js';
+import { ensureDirs, probeDuration, verifyYarn } from './voice.js';
 import {
-  submitRender, submitMulti, submitDub, submitShorts, submitProjectRender, submitAiVideo,
+  submitRender, submitMulti, submitDub, submitShorts, submitProjectRender, submitAiVideo, submitLocalVideo,
   jobView, queueEnabled, activeBackend, startWorker,
 } from './jobs.js';
+import { localVideoConfigured } from './local-video.js';
 import { transcriberAvailable } from './transcribe.js';
 import { loadProject, saveProject, validateProject, relayout, listProjects, hashOf } from './project.js';
 import { activeLlm } from './llm.js';
@@ -96,6 +97,11 @@ app.put('/api/brand', (req, res) => {
 app.post('/api/logo', streamUpload(() => config.dirs.work, 'logo', 'png'));
 
 app.get('/api/health', async (req, res) => {
+  // ?deep=1 runs a live YarnGPT auth probe (one extra request, ~1s) so the
+  // "Native voices" pill reflects whether the key is actually accepted — a set
+  // key that the server rejects still 500s mid-render. Default health stays cheap.
+  const deep = req.query.deep === '1' || req.query.deep === 'true';
+  const yarnLive = deep && config.yarnKey ? await verifyYarn().catch(() => null) : null;
   res.json({
     ok: true,
     keys: {
@@ -103,11 +109,14 @@ app.get('/api/health', async (req, res) => {
       pexels: Boolean(config.pexelsKey),
       pixabay: Boolean(config.pixabayKey),
       jamendo: Boolean(config.jamendoClientId),
-      yarn: Boolean(config.yarnKey),
+      // Deep probe wins when available; else fall back to key-presence.
+      yarn: yarnLive ? yarnLive.ok : Boolean(config.yarnKey),
     },
+    live: yarnLive ? { yarn: yarnLive } : undefined,
     features: {
       dub: await transcriberAvailable(), // transcription present → dub/shorts enabled
       youtube: await youtubeAvailable(), // yt-dlp present → YouTube footage source
+      localVideo: localVideoConfigured(), // local LTX worker present → free GPU video
     },
     llm: activeLlm(),
     model: config.xaiModel,
@@ -159,6 +168,17 @@ app.post('/api/render', async (req, res) => {
   try { opts = buildRenderOpts(req.body); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
   try { res.json({ jobId: await submitRender(opts) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- Local AI video (free, on your GPU): LTX-Video clips + your own voiceover ---
+// Reuses the stock render opts (it shares the voiceover/caption/finalize path);
+// only the footage is generated locally instead of downloaded.
+app.post('/api/local-video', async (req, res) => {
+  let opts;
+  try { opts = buildRenderOpts(req.body); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  try { res.json({ jobId: await submitLocalVideo(opts) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

@@ -5,7 +5,7 @@
 // memory path just resolves synchronously underneath.
 
 import {
-  runPipeline, runMultiPipeline, runDub, runShorts, startProjectRender, getJob, runAiVideo,
+  runPipeline, runMultiPipeline, runDub, runShorts, startProjectRender, getJob, runAiVideo, runLocalVideo,
 } from './pipeline.js';
 import { loadProject } from './project.js';
 import * as q from './queue.js';
@@ -36,6 +36,10 @@ export async function submitShorts(opts) {
 
 export async function submitAiVideo(opts) {
   return q.queueEnabled() ? q.enqueue('ai-video', opts) : runAiVideo(opts);
+}
+
+export async function submitLocalVideo(opts) {
+  return q.queueEnabled() ? q.enqueue('local-video', opts) : runLocalVideo(opts);
 }
 
 export async function submitProjectRender(projectId) {
