@@ -114,23 +114,55 @@ async function readJson(res) {
   return { data, text };
 }
 
-async function postGeneration(url, body, fetchImpl) {
-  const res = await fetchImpl(url, {
+// Global rate gate: xAI enforces a per-team requests-per-second cap (1 rps on
+// lower tiers). Every POST and poll GET is funneled through one promise chain
+// that spaces requests at least `minIntervalMs` apart, so concurrent scene
+// generations cannot burst past the limit. With minIntervalMs=0 (tests) it's a
+// near-instant no-op.
+let _gateLast = 0;
+let _gateChain = Promise.resolve();
+function rateGate(minIntervalMs) {
+  if (!minIntervalMs) return Promise.resolve();
+  _gateChain = _gateChain.then(async () => {
+    const wait = Math.max(0, _gateLast + minIntervalMs - Date.now());
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+    _gateLast = Date.now();
+  });
+  return _gateChain;
+}
+
+// Throttled fetch with a 429 backoff-retry. Honors Retry-After when present,
+// else exponential backoff off the rate-gate interval. `sleepImpl` is injected so
+// the retry path is unit-tested without real timers.
+async function gatedFetch(url, init, fetchImpl, minIntervalMs, sleepImpl) {
+  const maxRetries = 5;
+  for (let attempt = 0; ; attempt++) {
+    await rateGate(minIntervalMs);
+    const res = await fetchImpl(url, init);
+    if (res.status !== 429 || attempt >= maxRetries) return res;
+    const retryAfter = Number(res.headers?.get?.('retry-after')) || 0;
+    const wait = retryAfter > 0 ? retryAfter * 1000 : Math.min(15000, (minIntervalMs || 1100) * 2 ** attempt);
+    await sleepImpl(wait);
+  }
+}
+
+async function postGeneration(url, body, fetchImpl, minIntervalMs, sleepImpl) {
+  const res = await gatedFetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${config.xaiKey}` },
     body: JSON.stringify(body),
     agent: pickAgent,
-  });
+  }, fetchImpl, minIntervalMs, sleepImpl);
   const { data, text } = await readJson(res);
   if (!res.ok) throw new Error(`xAI video API ${res.status}: ${text.slice(0, 400)}`);
   return data;
 }
 
-async function getGeneration(url, fetchImpl) {
-  const res = await fetchImpl(url, {
+async function getGeneration(url, fetchImpl, minIntervalMs, sleepImpl) {
+  const res = await gatedFetch(url, {
     headers: { Authorization: `Bearer ${config.xaiKey}` },
     agent: pickAgent,
-  });
+  }, fetchImpl, minIntervalMs, sleepImpl);
   const { data, text } = await readJson(res);
   if (!res.ok) throw new Error(`xAI video poll ${res.status}: ${text.slice(0, 400)}`);
   return data;
@@ -147,6 +179,7 @@ export async function generateVideoClip(req, {
   sleepImpl = sleep,
   pollMs = config.xaiVideoPollMs,
   timeoutMs = config.xaiVideoTimeoutMs,
+  minIntervalMs = config.xaiVideoMinIntervalMs,
   onPoll = null,
 } = {}) {
   if (!config.xaiKey) throw new Error('XAI_API_KEY is not set');
@@ -154,7 +187,7 @@ export async function generateVideoClip(req, {
   const pathName = config.xaiVideoPath;
   const body = buildVideoRequest(req);
 
-  const created = await postGeneration(`${base}${pathName}`, body, fetchImpl);
+  const created = await postGeneration(`${base}${pathName}`, body, fetchImpl, minIntervalMs, sleepImpl);
 
   // Some deployments return the finished clip on the POST itself.
   const immediate = readVideoStatus(created);
@@ -168,7 +201,7 @@ export async function generateVideoClip(req, {
   let last = 'queued';
   while (Date.now() < deadline) {
     await sleepImpl(pollMs);
-    const data = await getGeneration(pollUrl(base, config.xaiVideoPollPath, id), fetchImpl);
+    const data = await getGeneration(pollUrl(base, config.xaiVideoPollPath, id), fetchImpl, minIntervalMs, sleepImpl);
     const st = readVideoStatus(data);
     last = st.status;
     if (onPoll) onPoll(st.status);

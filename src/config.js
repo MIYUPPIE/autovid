@@ -37,8 +37,14 @@ export const config = {
   // Poll cadence + per-clip timeout (generation is async, ~30-120s/clip).
   xaiVideoPollMs: parseInt(process.env.XAI_VIDEO_POLL_MS || '6000', 10),
   xaiVideoTimeoutMs: parseInt(process.env.XAI_VIDEO_TIMEOUT_MS || '300000', 10),
-  // How many scene clips to generate at once (rate limit is ~70 rpm).
+  // How many scene clips to generate at once. Safe to overlap because every API
+  // call (POST + poll) goes through a global rate gate below; concurrency just
+  // overlaps the long waits, it does not burst the request rate.
   xaiVideoConcurrency: parseInt(process.env.XAI_VIDEO_CONCURRENCY || '3', 10),
+  // Minimum spacing between ANY two xAI video requests, in ms. Lower tiers cap at
+  // 1 request/second, so 1100ms keeps every POST + poll safely under it. Raise if
+  // your team's RPS is below 1; lower it if you have a higher tier.
+  xaiVideoMinIntervalMs: parseInt(process.env.XAI_VIDEO_MIN_INTERVAL_MS || '1100', 10),
   // Retries for a single scene's generation before the render gives up on it.
   xaiVideoRetries: parseInt(process.env.XAI_VIDEO_RETRIES || '2', 10),
 

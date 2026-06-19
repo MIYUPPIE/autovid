@@ -124,7 +124,7 @@ test('generateVideoClip POSTs then polls queued→generating→completed', async
 
     const url = await generateVideoClip(
       { prompt: 'a presenter says hi', aspect: '9:16', duration: 6 },
-      { fetchImpl, sleepImpl: async () => {}, pollMs: 0, timeoutMs: 10000, onPoll: (s) => statuses.push(s) },
+      { fetchImpl, sleepImpl: async () => {}, pollMs: 0, minIntervalMs: 0, timeoutMs: 10000, onPoll: (s) => statuses.push(s) },
     );
 
     assert.equal(url, 'https://x/final.mp4');
@@ -146,9 +146,33 @@ test('generateVideoClip returns immediately when POST already has the video', as
       if ((opts?.method || 'GET') === 'POST') return jsonRes({ status: 'completed', url: 'https://x/now.mp4' });
       polls++; return jsonRes({});
     };
-    const url = await generateVideoClip({ prompt: 'p', aspect: '1:1' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 0 });
+    const url = await generateVideoClip({ prompt: 'p', aspect: '1:1' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 0, minIntervalMs: 0 });
     assert.equal(url, 'https://x/now.mp4');
     assert.equal(polls, 0);
+  } finally {
+    config.xaiKey = prevKey;
+  }
+});
+
+test('generateVideoClip retries past a 429 rate-limit instead of failing', async () => {
+  const prevKey = config.xaiKey;
+  config.xaiKey = 'test-key';
+  try {
+    // POST gets rate-limited once (429), then succeeds; poll completes.
+    const responses = [
+      jsonRes({ error: 'Too many requests' }, false, 429),
+      jsonRes({ request_id: 'job_9' }),
+      jsonRes({ status: 'done', video: { url: 'https://x/ok.mp4' } }),
+    ];
+    let i = 0;
+    const calls = [];
+    const fetchImpl = async (url, opts) => { calls.push(opts?.method || 'GET'); return responses[i++]; };
+    const url = await generateVideoClip(
+      { prompt: 'p', aspect: '9:16' },
+      { fetchImpl, sleepImpl: async () => {}, pollMs: 0, minIntervalMs: 0 },
+    );
+    assert.equal(url, 'https://x/ok.mp4');
+    assert.deepEqual(calls.slice(0, 2), ['POST', 'POST']); // the 429 POST was retried
   } finally {
     config.xaiKey = prevKey;
   }
@@ -162,7 +186,7 @@ test('generateVideoClip throws a clear error when the API reports failure', asyn
     const responses = [jsonRes({ id: 'j' }), jsonRes({ status: 'failed', error: 'content blocked' })];
     const fetchImpl = async () => responses[i++];
     await assert.rejects(
-      () => generateVideoClip({ prompt: 'p', aspect: '9:16' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 0 }),
+      () => generateVideoClip({ prompt: 'p', aspect: '9:16' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 0, minIntervalMs: 0 }),
       /content blocked/,
     );
   } finally {
@@ -177,7 +201,7 @@ test('generateVideoClip times out instead of polling forever', async () => {
     let i = 0;
     const fetchImpl = async () => (i++ === 0 ? jsonRes({ id: 'j' }) : jsonRes({ status: 'generating' }));
     await assert.rejects(
-      () => generateVideoClip({ prompt: 'p', aspect: '9:16' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 1, timeoutMs: 5 }),
+      () => generateVideoClip({ prompt: 'p', aspect: '9:16' }, { fetchImpl, sleepImpl: async () => {}, pollMs: 1, minIntervalMs: 0, timeoutMs: 5 }),
       /timed out/,
     );
   } finally {
