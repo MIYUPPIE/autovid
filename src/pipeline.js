@@ -19,6 +19,7 @@ import { probeSize, nearestAspect, extractAudio, makeShort } from './ffmpeg.js';
 import { probeDuration } from './voice.js';
 import { transcribe, transcriptText, highlightWindows, pickTopWindows, windowCues, windowWordCues } from './transcribe.js';
 import { translateForDub } from './dub.js';
+import { processAiVideo } from './ai-video.js';
 
 // Bilingual pacing: gap between the two language reads, and after each scene.
 const GAP_BETWEEN_LANGS = 0.25;
@@ -90,6 +91,7 @@ export const PROCESSORS = {
   dub: processDub,
   shorts: processShorts,
   'project-render': processProjectRender,
+  'ai-video': processAiVideo,
 };
 
 /**
@@ -722,4 +724,10 @@ export async function processRender(opts, ctx) {
 
 export function runPipeline(opts) {
   return runMemory({ kind: 'render', processor: processRender, args: opts, startMessage: 'Starting', startPct: 0 });
+}
+
+// In-memory wrapper for the AI talking-video mode (Redis path dispatches the same
+// 'ai-video' processor via PROCESSORS).
+export function runAiVideo(opts) {
+  return runMemory({ kind: 'ai-video', processor: processAiVideo, args: opts, startMessage: 'Starting', startPct: 0 });
 }

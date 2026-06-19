@@ -8,7 +8,7 @@ import { config, RESOLUTIONS, ROOT } from './config.js';
 import { VOICES, isValidVoice, defaultVoice } from './voices.js';
 import { ensureDirs, probeDuration } from './voice.js';
 import {
-  submitRender, submitMulti, submitDub, submitShorts, submitProjectRender,
+  submitRender, submitMulti, submitDub, submitShorts, submitProjectRender, submitAiVideo,
   jobView, queueEnabled, activeBackend, startWorker,
 } from './jobs.js';
 import { transcriberAvailable } from './transcribe.js';
@@ -159,6 +159,38 @@ app.post('/api/render', async (req, res) => {
   try { opts = buildRenderOpts(req.body); }
   catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
   try { res.json({ jobId: await submitRender(opts) }); }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+// --- AI talking video (xAI Grok Imagine): xAI generates the clips AND speech ---
+// Separate from /api/render. No stock footage, no neural voiceover — the picture
+// and the voice both come from xAI, with lip-sync to the generated speech.
+function buildAiVideoOpts(b = {}) {
+  const topic = (b.topic || '').toString().trim();
+  const script = (b.script || '').toString().trim();
+  if (!topic && !script) { const e = new Error('topic or script is required'); e.status = 400; throw e; }
+  const context = b.context === 'africa' ? 'africa' : 'global';
+  const aspect = RESOLUTIONS[b.aspect] ? b.aspect : '9:16';
+  const targetSeconds = Math.max(15, Math.min(180, Number(b.targetSeconds) || 45));
+  const tone = (b.tone || 'engaging').toString();
+  const language = (b.language || 'English').toString().trim() || 'English';
+  const resolution = ['480p', '720p', '1080p'].includes(b.resolution) ? b.resolution : config.xaiVideoResolution;
+  const captionStyle = {};
+  if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
+  if (Number(b.captionScale) > 0) captionStyle.scale = Number(b.captionScale);
+  if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
+  return {
+    topic, script, context, aspect, targetSeconds, tone, language, resolution,
+    subtitles: Boolean(b.subtitles), fades: b.fades !== false, autoMusic: Boolean(b.autoMusic), captionStyle,
+  };
+}
+
+app.post('/api/ai-video', async (req, res) => {
+  if (!config.xaiKey) return res.status(503).json({ error: 'XAI_API_KEY is not set — AI video needs an xAI key with Grok Imagine access' });
+  let opts;
+  try { opts = buildAiVideoOpts(req.body); }
+  catch (e) { return res.status(e.status || 400).json({ error: e.message }); }
+  try { res.json({ jobId: await submitAiVideo(opts) }); }
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 

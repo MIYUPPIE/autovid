@@ -16,6 +16,28 @@ export const config = {
   xaiModel: process.env.XAI_MODEL || 'grok-4-latest',
   xaiBase: 'https://api.x.ai/v1',
 
+  // --- AI talking-video mode (xAI Grok Imagine) ---
+  // A SEPARATE generation path from the stock-footage pipeline: xAI generates the
+  // actual video clips AND their speech/lip-sync from each scene prompt. Uses the
+  // same XAI_API_KEY. The Imagine video API is a POST-then-poll endpoint (not
+  // chat/completions). Endpoint path is configurable because xAI/proxies have
+  // shipped it under a couple of routes — confirm yours in the xAI dashboard.
+  xaiVideoModel: process.env.XAI_VIDEO_MODEL || 'grok-imagine-video',
+  xaiVideoBase: process.env.XAI_VIDEO_BASE || 'https://api.x.ai/v1',
+  xaiVideoPath: process.env.XAI_VIDEO_PATH || '/video/generations',
+  // How the poll URL carries the job id: 'path' → `${path}/${id}` (default),
+  // 'query' → `${path}?id=${id}` (some gateways).
+  xaiVideoPollStyle: process.env.XAI_VIDEO_POLL_STYLE || 'path',
+  // Output resolution for generated clips: 480p | 720p | 1080p.
+  xaiVideoResolution: process.env.XAI_VIDEO_RESOLUTION || '720p',
+  // Poll cadence + per-clip timeout (generation is async, ~30-120s/clip).
+  xaiVideoPollMs: parseInt(process.env.XAI_VIDEO_POLL_MS || '6000', 10),
+  xaiVideoTimeoutMs: parseInt(process.env.XAI_VIDEO_TIMEOUT_MS || '300000', 10),
+  // How many scene clips to generate at once (rate limit is ~70 rpm).
+  xaiVideoConcurrency: parseInt(process.env.XAI_VIDEO_CONCURRENCY || '3', 10),
+  // Retries for a single scene's generation before the render gives up on it.
+  xaiVideoRetries: parseInt(process.env.XAI_VIDEO_RETRIES || '2', 10),
+
   // LLM provider for scriptwriting/planning: 'xai' (default) | 'openrouter' | 'claude-code'.
   llmProvider: process.env.LLM_PROVIDER || 'xai',
   openrouterKey: process.env.OPENROUTER_API_KEY || '',
