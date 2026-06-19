@@ -36,7 +36,8 @@ export function normalizeResolution(r) {
   return ['480p', '720p', '1080p'].includes(r) ? r : '720p';
 }
 
-// Build the generation request body. Pure → gate-tested.
+// Build the generation request body. Pure → gate-tested. Per xAI's REST spec the
+// image inputs are OBJECTS ({ url } or { file_id }), not bare url strings.
 export function buildVideoRequest({
   prompt, model, imageUrl = null, referenceImages = null, duration, aspect, resolution,
 }) {
@@ -47,9 +48,9 @@ export function buildVideoRequest({
     aspect_ratio: aspectToRatio(aspect),
     resolution: normalizeResolution(resolution || config.xaiVideoResolution),
   };
-  if (imageUrl) body.image_url = imageUrl;
+  if (imageUrl) body.image = { url: imageUrl };
   if (Array.isArray(referenceImages) && referenceImages.length) {
-    body.reference_images = referenceImages.slice(0, 7);
+    body.reference_images = referenceImages.slice(0, 7).map((r) => (typeof r === 'string' ? { url: r } : r));
   }
   return body;
 }
@@ -90,16 +91,17 @@ export function readVideoStatus(data) {
   if (failed.includes(raw)) {
     return { status: 'error', url: null, error: err || `generation ${raw}` };
   }
-  if (['generating', 'processing', 'running', 'in_progress', 'in-progress', 'started'].includes(raw)) {
+  if (['generating', 'processing', 'running', 'in_progress', 'in-progress', 'started', 'pending'].includes(raw)) {
     return { status: 'generating', url: null, error: null };
   }
   return { status: 'queued', url: null, error: null };
 }
 
-// Build the poll URL for a job id. Pure (config-driven). Default appends the id
-// to the path; XAI_VIDEO_POLL_STYLE=query uses `?id=`.
-export function pollUrl(base, pathName, id, style = config.xaiVideoPollStyle) {
-  const root = `${base}${pathName}`;
+// Build the poll URL for a job id. Pure (config-driven). `pollPath` is the poll
+// route (xAI: /videos), which is NOT the generation route (/videos/generations).
+// Default appends the id to the path; XAI_VIDEO_POLL_STYLE=query uses `?id=`.
+export function pollUrl(base, pollPath, id, style = config.xaiVideoPollStyle) {
+  const root = `${base}${pollPath}`;
   return style === 'query'
     ? `${root}?id=${encodeURIComponent(id)}`
     : `${root}/${encodeURIComponent(id)}`;
@@ -166,7 +168,7 @@ export async function generateVideoClip(req, {
   let last = 'queued';
   while (Date.now() < deadline) {
     await sleepImpl(pollMs);
-    const data = await getGeneration(pollUrl(base, pathName, id), fetchImpl);
+    const data = await getGeneration(pollUrl(base, config.xaiVideoPollPath, id), fetchImpl);
     const st = readVideoStatus(data);
     last = st.status;
     if (onPoll) onPoll(st.status);

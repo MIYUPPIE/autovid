@@ -24,9 +24,13 @@ export const config = {
   // shipped it under a couple of routes — confirm yours in the xAI dashboard.
   xaiVideoModel: process.env.XAI_VIDEO_MODEL || 'grok-imagine-video',
   xaiVideoBase: process.env.XAI_VIDEO_BASE || 'https://api.x.ai/v1',
-  xaiVideoPath: process.env.XAI_VIDEO_PATH || '/video/generations',
-  // How the poll URL carries the job id: 'path' → `${path}/${id}` (default),
-  // 'query' → `${path}?id=${id}` (some gateways).
+  // POST here to start a generation (returns { request_id }); POLL the SEPARATE
+  // path below with that id (xAI uses GET /v1/videos/{request_id}, which drops
+  // the "generations" segment — they are NOT the same path).
+  xaiVideoPath: process.env.XAI_VIDEO_PATH || '/videos/generations',
+  xaiVideoPollPath: process.env.XAI_VIDEO_POLL_PATH || '/videos',
+  // How the poll URL carries the job id: 'path' → `${pollPath}/${id}` (default,
+  // what xAI uses), 'query' → `${pollPath}?id=${id}` (some gateways).
   xaiVideoPollStyle: process.env.XAI_VIDEO_POLL_STYLE || 'path',
   // Output resolution for generated clips: 480p | 720p | 1080p.
   xaiVideoResolution: process.env.XAI_VIDEO_RESOLUTION || '720p',

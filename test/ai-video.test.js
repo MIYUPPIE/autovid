@@ -47,15 +47,16 @@ test('buildVideoRequest produces the documented body, omitting empty image field
   assert.equal(body.duration, 15);        // clamped
   assert.equal(body.aspect_ratio, '9:16');
   assert.equal(body.resolution, '1080p');
-  assert.ok(!('image_url' in body));
+  assert.ok(!('image' in body));
   assert.ok(!('reference_images' in body));
 });
 
-test('buildVideoRequest carries image + reference inputs and caps refs at 7', () => {
+test('buildVideoRequest carries image + reference inputs (as objects) and caps refs at 7', () => {
   const refs = Array.from({ length: 10 }, (_, i) => `https://x/${i}.png`);
   const body = buildVideoRequest({ prompt: 'p', aspect: '16:9', imageUrl: 'https://x/a.png', referenceImages: refs });
-  assert.equal(body.image_url, 'https://x/a.png');
+  assert.deepEqual(body.image, { url: 'https://x/a.png' }); // xAI expects an object, not image_url
   assert.equal(body.reference_images.length, 7);
+  assert.deepEqual(body.reference_images[0], { url: 'https://x/0.png' });
 });
 
 test('extractJobId reads id across field-name variants', () => {
@@ -92,11 +93,11 @@ test('readVideoStatus finds the url in assets/output/data array shapes', () => {
   assert.equal(readVideoStatus({ status: 'done', data: [{ url: 'https://x/d.mp4' }] }).url, 'https://x/d.mp4');
 });
 
-test('pollUrl builds path- and query-style URLs', () => {
-  assert.equal(pollUrl('https://api.x.ai/v1', '/video/generations', 'abc', 'path'),
-    'https://api.x.ai/v1/video/generations/abc');
-  assert.equal(pollUrl('https://api.x.ai/v1', '/video/generations', 'a b', 'query'),
-    'https://api.x.ai/v1/video/generations?id=a%20b');
+test('pollUrl builds path- and query-style URLs from the poll path (/videos, not /videos/generations)', () => {
+  assert.equal(pollUrl('https://api.x.ai/v1', '/videos', 'abc', 'path'),
+    'https://api.x.ai/v1/videos/abc');
+  assert.equal(pollUrl('https://api.x.ai/v1', '/videos', 'a b', 'query'),
+    'https://api.x.ai/v1/videos?id=a%20b');
 });
 
 // --- generateVideoClip state machine (injected fetch + sleep) -------------
@@ -110,11 +111,12 @@ test('generateVideoClip POSTs then polls queued→generating→completed', async
   config.xaiKey = 'test-key'; // generateVideoClip refuses without a key
   try {
     const calls = [];
+    // Mirrors xAI's real shape: POST → { request_id }, poll → pending → done.
     const responses = [
-      jsonRes({ id: 'job_1', status: 'queued' }),        // POST create
-      jsonRes({ status: 'queued' }),                     // poll 1
-      jsonRes({ status: 'generating' }),                 // poll 2
-      jsonRes({ status: 'completed', url: 'https://x/final.mp4' }), // poll 3
+      jsonRes({ request_id: 'job_1' }),                                  // POST create
+      jsonRes({ status: 'pending' }),                                    // poll 1
+      jsonRes({ status: 'pending' }),                                    // poll 2
+      jsonRes({ status: 'done', video: { url: 'https://x/final.mp4' } }), // poll 3
     ];
     let i = 0;
     const fetchImpl = async (url, opts) => { calls.push({ url, method: opts?.method || 'GET' }); return responses[i++]; };
@@ -127,9 +129,9 @@ test('generateVideoClip POSTs then polls queued→generating→completed', async
 
     assert.equal(url, 'https://x/final.mp4');
     assert.equal(calls[0].method, 'POST');
-    assert.match(calls[0].url, /\/video\/generations$/);
-    assert.match(calls[1].url, /\/video\/generations\/job_1$/);
-    assert.deepEqual(statuses, ['queued', 'generating', 'completed']);
+    assert.match(calls[0].url, /\/videos\/generations$/);   // POST: /videos/generations
+    assert.match(calls[1].url, /\/videos\/job_1$/);         // POLL: /videos/{id} (no "generations")
+    assert.deepEqual(statuses, ['generating', 'generating', 'completed']);
   } finally {
     config.xaiKey = prevKey;
   }
