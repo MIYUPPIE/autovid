@@ -94,6 +94,12 @@ export const config = {
   yarnMinChunkChars: parseInt(process.env.YARN_MIN_CHUNK_CHARS || '100', 10),
   // Per-request timeout so a stalled chunk can't hang the whole render.
   yarnTimeoutMs: parseInt(process.env.YARN_TIMEOUT_MS || '180000', 10),
+  // YarnGPT 500s on transient auth/db blips ("An unexpected internal error
+  // occurred."), so one bad chunk must not kill a whole render: retry transient
+  // 5xx/429 with exponential backoff (base yarnBackoffMs, capped at 15s) before
+  // giving up. Mirrors the xAI video 429 retry.
+  yarnRetries: parseInt(process.env.YARN_RETRIES || '3', 10),
+  yarnBackoffMs: parseInt(process.env.YARN_BACKOFF_MS || '800', 10),
   maxClips: parseInt(process.env.MAX_CLIPS || '12', 10),
   downloadTimeout: parseInt(process.env.DOWNLOAD_TIMEOUT_MS || '30000', 10),
 
@@ -131,6 +137,28 @@ export const config = {
   // Scene transition crossfade length (#8). Each scene clip is normalized this
   // many seconds longer so the xfade overlap nets back to the intended cut times.
   transitionSeconds: parseFloat(process.env.TRANSITION_SECONDS || '0.4'),
+
+  // --- Local AI video (free, runs on your own GPU via LTX-Video) ---
+  // A third generation mode: an open video model generates SILENT clips locally
+  // (zero per-render cost), and your existing free voiceover + captions ride on
+  // top. Tuned for a 6GB card by default (small clips, CPU offload in the Python
+  // worker); it is SLOW (minutes per clip). Raise the size knobs if you have more
+  // VRAM. The Python worker lives in services/localvid/.
+  localvidPython: process.env.LOCALVID_PYTHON || '/home/okhub/anaconda3/envs/tf_gpu/bin/python',
+  localvidModel: process.env.LTX_MODEL || 'Lightricks/LTX-Video',
+  // Short-side resolution the model generates at (divisible by 32). The render's
+  // normalize step upscales to the real frame, so small here = less VRAM/time.
+  localvidBase: parseInt(process.env.LOCALVID_BASE || '384', 10),
+  localvidFps: parseInt(process.env.LOCALVID_FPS || '24', 10),
+  // Frames per generated clip (must end up % 8 == 1; the worker coerces). 49 ≈ 2s.
+  localvidMaxFrames: parseInt(process.env.LOCALVID_FRAMES || '49', 10),
+  localvidSteps: parseInt(process.env.LOCALVID_STEPS || '30', 10),
+  // One AI clip covers ~this many seconds of the video (kept near the clip length
+  // so the freeze-pad tail stays short). Smaller = more clips = slower but livelier.
+  localvidSecondsPerScene: parseInt(process.env.LOCALVID_SCENE_SECONDS || '4', 10),
+  // Model load (first run downloads several GB) can be slow; per-clip is minutes.
+  localvidReadyTimeoutMs: parseInt(process.env.LOCALVID_READY_TIMEOUT_MS || '900000', 10),
+  localvidJobTimeoutMs: parseInt(process.env.LOCALVID_JOB_TIMEOUT_MS || '900000', 10),
 
   dirs: {
     raw: path.join(ROOT, 'assets', 'raw'),

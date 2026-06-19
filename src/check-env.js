@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { config } from './config.js';
+import { verifyYarn } from './voice.js';
 
 const execFileP = promisify(execFile);
 
@@ -27,8 +28,27 @@ console.log(`  ${config.xaiKey ? '✓' : '✗'} XAI_API_KEY`);
 console.log(`  ${config.pexelsKey ? '✓' : '✗'} PEXELS_API_KEY`);
 console.log(`  ${config.pixabayKey ? '✓' : '✗'} PIXABAY_API_KEY`);
 console.log(`  ${config.jamendoClientId ? '✓' : '✗'} JAMENDO_CLIENT_ID  (auto background music)`);
-console.log(`  ${config.yarnKey ? '✓' : '✗'} YARN_API_KEY  (Yoruba/Igbo/Hausa voices)`);
+// Live probe, not just key-presence: YarnGPT 500s when a key is present but
+// rejected, so "set" never meant "works". This catches a bad/expired key here
+// instead of mid-render.
+if (config.yarnKey) {
+  const v = await verifyYarn().catch((e) => ({ ok: false, message: e.message }));
+  console.log(`  ${v.ok ? '✓' : '✗'} YARN_API_KEY  (Yoruba/Igbo/Hausa voices) — ${v.message}`);
+} else {
+  console.log('  ✗ YARN_API_KEY  (Yoruba/Igbo/Hausa voices) — not set');
+}
 console.log(`  ${config.xaiKey ? '✓' : '✗'} XAI_API_KEY  → AI talking video (${config.xaiVideoModel} @ ${config.xaiVideoBase}${config.xaiVideoPath}, ${config.xaiVideoResolution})`);
+
+console.log('\nLocal AI video (free, your GPU):');
+await check(`python (${config.localvidPython})`, async () => {
+  const { stdout } = await execFileP(config.localvidPython, ['--version']);
+  return stdout.trim() || 'ok';
+});
+await check('torch + CUDA + diffusers', async () => {
+  const code = 'import torch,diffusers;print("torch",torch.__version__,"| cuda",torch.cuda.is_available(),"|",(torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no-gpu"),"| diffusers",diffusers.__version__)';
+  const { stdout } = await execFileP(config.localvidPython, ['-c', code], { timeout: 60000 });
+  return stdout.trim();
+});
 
 console.log('\nJob queue:');
 if (!config.redisUrl) {

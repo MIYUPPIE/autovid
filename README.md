@@ -33,7 +33,7 @@ One continuous voiceover is synthesized for the whole video (not sentence-by-sen
   pip install edge-tts          # or: pipx install edge-tts
   ```
   Verify: `edge-tts --list-voices | head`
-- **Native-language TTS (Yoruba/Igbo/Hausa)** — a [YarnGPT](https://yarngpt.ai) API key in `YARN_API_KEY`. No local GPU/model needed; the request is hosted. Verify: `npm run eval:yarn`.
+- **Native-language TTS (Yoruba/Igbo/Hausa)** — a [YarnGPT](https://yarngpt.ai) API key in `YARN_API_KEY`. No local GPU/model needed; the request is hosted. Verify free with `npm run check` (live auth probe — a set-but-rejected key is caught here, not mid-render), or with a real synthesis via `npm run eval:yarn`. YarnGPT returns a generic **500** when a key is present but rejected, so a persistent 500 almost always means the key is invalid/expired — rotate it at [yarngpt.ai](https://yarngpt.ai). Transient 5xx are retried automatically (`YARN_RETRIES`).
 - **Auto music** — a free Jamendo client id in `JAMENDO_CLIENT_ID` (see API keys).
 - **Job queue (optional, recommended for a server)** — Redis, so renders survive a restart: `sudo apt install -y redis-server`, then set `REDIS_URL` in `.env`. Without it the app uses an in-memory queue (fine for one box; jobs lost on restart). See [Job queue](#job-queue-renders-survive-restarts).
 
