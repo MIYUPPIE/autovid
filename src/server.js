@@ -175,12 +175,15 @@ function buildAiVideoOpts(b = {}) {
   const tone = (b.tone || 'engaging').toString();
   const language = (b.language || 'English').toString().trim() || 'English';
   const resolution = ['480p', '720p', '1080p'].includes(b.resolution) ? b.resolution : config.xaiVideoResolution;
+  // Number of AI clips to generate (the cost lever). Each clip is ≤15s, so total
+  // runtime ≈ clips × ≤15s. Blank → ~1 clip per 30s of target length.
+  const clips = Number(b.clips) > 0 ? Math.max(1, Math.min(8, Math.round(Number(b.clips)))) : null;
   const captionStyle = {};
   if (b.captionSize && CAPTION_SIZES[b.captionSize]) captionStyle.size = b.captionSize;
   if (Number(b.captionScale) > 0) captionStyle.scale = Number(b.captionScale);
   if (b.captionAnim && CAPTION_ANIMS.includes(b.captionAnim)) captionStyle.captionAnim = b.captionAnim;
   return {
-    topic, script, context, aspect, targetSeconds, tone, language, resolution,
+    topic, script, context, aspect, targetSeconds, tone, language, resolution, clips,
     subtitles: Boolean(b.subtitles), fades: b.fades !== false, autoMusic: Boolean(b.autoMusic), captionStyle,
   };
 }

@@ -12,7 +12,7 @@ import {
   extractJobId, readVideoStatus, pollUrl, generateVideoClip,
 } from '../src/grok-video.js';
 import {
-  estDurationForLine, buildScenePrompt, normalizeTalkingPlan,
+  estDurationForLine, buildScenePrompt, normalizeTalkingPlan, defaultClipCount, resolveClipBudget,
 } from '../src/ai-video.js';
 import { config } from '../src/config.js';
 import { PROCESSORS } from '../src/pipeline.js';
@@ -235,6 +235,33 @@ test('normalizeTalkingPlan (script mode) keeps verbatim lines and pairs shots', 
   assert.equal(plan.scenes[0].line, 'First sentence the user wrote.');
   assert.equal(plan.scenes[0].shot, 'shot one');
   assert.equal(plan.scenes[1].line, 'Second sentence.');
+});
+
+test('defaultClipCount is ~1 clip per 30s (the user-requested ratio)', () => {
+  assert.equal(defaultClipCount(30), 1);   // 30s → 1 clip
+  assert.equal(defaultClipCount(60), 2);   // 60s → 2 clips
+  assert.equal(defaultClipCount(45), 2);   // rounds
+  assert.equal(defaultClipCount(15), 1);   // floor of 1
+});
+
+test('resolveClipBudget honors a pinned clip count and caps each clip at 15s', () => {
+  // 30s / 1 clip → one clip, duration capped at 15s (a clip cannot be 30s).
+  const a = resolveClipBudget(30, 1);
+  assert.equal(a.sceneCount, 1);
+  assert.equal(a.clipSeconds, 15);
+  assert.equal(a.wordsPerScene, 38); // 15 * 2.5
+
+  // 60s / 2 clips → two clips, each capped at 15s.
+  const b = resolveClipBudget(60, 2);
+  assert.equal(b.sceneCount, 2);
+  assert.equal(b.clipSeconds, 15);
+
+  // blank clips → default ratio.
+  assert.equal(resolveClipBudget(60, null).sceneCount, 2);
+  assert.equal(resolveClipBudget(30, null).sceneCount, 1);
+
+  // never exceeds maxClips.
+  assert.equal(resolveClipBudget(600, 99, 8).sceneCount, 8);
 });
 
 test('ai-video is registered as a queue processor', () => {
