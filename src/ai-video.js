@@ -30,6 +30,21 @@ export function estDurationForLine(line, fallback = config.secondsPerScene) {
   return Math.max(3, Math.min(15, Math.round(words / 2.5) + 1));
 }
 
+// Default clip count: ~1 clip per 30s of target length (the cost lever). A clip
+// is capped at 15s by the API, so total runtime ≈ clips × ≤15s. Pure.
+export function defaultClipCount(targetSeconds) {
+  return Math.max(1, Math.round((Number(targetSeconds) || 30) / 30));
+}
+
+// Resolve how many clips to generate and how long/wordy each one is. `clips`
+// (when given) wins; each clip is clamped to the API's 1-15s window and its line
+// sized to ~2.5 words/sec so the speech fits. Pure → gate-tested.
+export function resolveClipBudget(targetSeconds, clips, maxClips = config.maxScenes) {
+  const sceneCount = Math.max(1, Math.min(maxClips, Math.round(clips || defaultClipCount(targetSeconds))));
+  const clipSeconds = Math.max(3, Math.min(15, Math.round((Number(targetSeconds) || 30) / sceneCount)));
+  return { sceneCount, clipSeconds, wordsPerScene: Math.round(clipSeconds * 2.5) };
+}
+
 // Aspect → a framing phrase for the video prompt. Pure.
 function framingFor(aspect) {
   if (aspect === '9:16') return 'vertical 9:16 framing, subject centered';
@@ -93,7 +108,7 @@ export function normalizeTalkingPlan(parsed, { cap, fallbackTitle = 'AI Video', 
  * Returns the normalized plan.
  */
 export async function generateTalkingPlan({
-  topic, script, context = 'global', language = 'English', tone = 'engaging', targetSeconds = 60, aspect = '9:16',
+  topic, script, context = 'global', language = 'English', tone = 'engaging', targetSeconds = 60, aspect = '9:16', clips = null,
 }) {
   const hasScript = Boolean(script && script.trim());
   const region = context === 'africa'
@@ -101,10 +116,18 @@ export async function generateTalkingPlan({
     : 'Keep the presenter and setting broadly relatable.';
 
   if (hasScript) {
-    const wordsPerScene = Math.max(12, Math.round(config.secondsPerScene * 2.5));
+    // Script length drives the clip count unless the user pinned `clips`. When
+    // pinned we pack the whole script into exactly that many chunks (each clip is
+    // still ≤15s, so a long script per clip gets compressed by the clip cap).
+    const cap = clips
+      ? Math.max(1, Math.min(config.maxScriptScenes, Math.round(clips)))
+      : config.maxScriptScenes;
+    const totalWords = script.trim().split(/\s+/).filter(Boolean).length;
+    const wordsPerScene = clips
+      ? Math.max(1, Math.ceil(totalWords / cap))
+      : Math.max(12, Math.round(config.secondsPerScene * 2.5));
     let segments = splitScriptIntoScenes(script, wordsPerScene);
     if (segments.length === 0) throw new Error('script is empty');
-    const cap = config.maxScriptScenes;
     if (segments.length > cap) {
       const head = segments.slice(0, cap - 1);
       head.push(segments.slice(cap - 1).join(' '));
@@ -130,13 +153,12 @@ Give exactly ${segments.length} shots, in order.`;
     return normalizeTalkingPlan(parsed, { cap, fallbackTitle: 'My Script', lines: segments });
   }
 
-  const sceneCount = Math.max(3, Math.min(config.maxScenes, Math.round(targetSeconds / config.secondsPerScene)));
-  const wordsPerScene = Math.round(config.secondsPerScene * 2.5);
+  const { sceneCount, clipSeconds, wordsPerScene } = resolveClipBudget(targetSeconds, clips);
   const sys = `You are an award-winning director of TALKING-PRESENTER short-form videos: one charismatic on-camera narrator speaks to the camera across the whole piece. Output ONLY valid JSON. No markdown.
 Write every \`line\` (the spoken narration) in natural, fluent ${language}${language.toLowerCase() === 'english' ? '' : ' — idiomatic, not word-for-word from English; spell out numbers/dates as words'}.
 Give ONE \`character\` description (English): the narrator's age, look, clothing, setting and lighting, kept consistent across EVERY scene so the same person appears throughout.
 For each scene give a \`shot\` (English, concrete, cinematic) describing the framing/setting/action behind the presenter.
-Arc: hook → build → payoff → memorable closing line. Keep each \`line\` to about ${wordsPerScene} words so it fits a ${config.secondsPerScene}-second clip.
+Arc: hook → build → payoff → memorable closing line. Keep each \`line\` to about ${wordsPerScene} words so it fits a ${clipSeconds}-second clip.
 ${region}`;
   const user = `Topic: "${topic}"
 Tone: ${tone}.
@@ -152,7 +174,7 @@ Make exactly ${sceneCount} scenes.`;
     [{ role: 'system', content: sys }, { role: 'user', content: user }],
     { temperature: 0.9, jsonMode: true },
   ));
-  return normalizeTalkingPlan(parsed, { cap: config.maxScenes, fallbackTitle: topic || 'AI Video' });
+  return normalizeTalkingPlan(parsed, { cap: sceneCount, fallbackTitle: topic || 'AI Video' });
 }
 
 // Run `fn` over `items` with at most `limit` in flight, preserving order. Local
@@ -203,7 +225,7 @@ export async function processAiVideo(opts, ctx) {
   const {
     topic, script, context = 'global', aspect = '9:16', targetSeconds = 60, tone = 'engaging',
     language = 'English', subtitles = false, fades = true, autoMusic: wantMusic = false,
-    captionStyle = {}, resolution = config.xaiVideoResolution,
+    captionStyle = {}, resolution = config.xaiVideoResolution, clips = null,
   } = opts;
 
   if (!config.xaiKey) throw new Error('XAI_API_KEY is not set');
@@ -211,7 +233,7 @@ export async function processAiVideo(opts, ctx) {
 
   // 1. Plan: spoken lines + shots + a consistent presenter.
   ctx.emit('planning', `Writing the talking-video script (${language})…`, 5);
-  const plan = await generateTalkingPlan({ topic, script, context, language, tone, targetSeconds, aspect });
+  const plan = await generateTalkingPlan({ topic, script, context, language, tone, targetSeconds, aspect, clips });
   if (!plan.scenes.length) throw new Error('planning produced no scenes');
   ctx.setPlan(plan);
   const n = plan.scenes.length;
@@ -225,7 +247,7 @@ export async function processAiVideo(opts, ctx) {
   ctx.emit('generate', `Generating ${n} AI clips (${totalSec}s, ~$${(totalSec * perSec).toFixed(2)} at ${resolution})…`, 16);
 
   let done = 0;
-  const clips = await mapLimit(plan.scenes, config.xaiVideoConcurrency, async (scene) => {
+  const sceneClips = await mapLimit(plan.scenes, config.xaiVideoConcurrency, async (scene) => {
     const prompt = buildScenePrompt({ character: plan.character, shot: scene.shot, line: scene.line, tone, language, aspect });
     scene.prompt = prompt;
     const raw = await generateScene({
@@ -247,7 +269,7 @@ export async function processAiVideo(opts, ctx) {
   if (subtitles) {
     let t = 0;
     const cues = [];
-    for (const c of clips) {
+    for (const c of sceneClips) {
       if (c.line) cues.push({ start: t, end: t + c.realDur, text: c.line });
       t += c.realDur;
     }
@@ -271,7 +293,7 @@ export async function processAiVideo(opts, ctx) {
   // 5. Stitch the talking clips (audio preserved), then the final pass: captions,
   // ducked music, fades, brand logo.
   ctx.emit('render', 'Stitching scenes…', 80);
-  const avConcat = await concatAv({ files: clips.map((c) => c.norm), outBase: id });
+  const avConcat = await concatAv({ files: sceneClips.map((c) => c.norm), outBase: id });
 
   const brand = loadBrand();
   ctx.emit('render', 'Rendering final video…', 90);

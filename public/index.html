@@ -686,7 +686,12 @@
         <div class="tog" id="aivideoTog" style="display:none"><span>🎬 AI video <span class="muted">(xAI generates the clips + voice with lip-sync — no stock footage / neural voiceover)</span></span>
           <div class="sw" id="sw-aivideo"><i></i></div></div>
       </div>
-      <div class="muted" id="aivideoNote" style="display:none;margin-top:8px">⚠ AI video uses the xAI Grok Imagine API (paid, ~$0.07/s). xAI generates the picture AND the spoken voice from your script — the voice/footage/transition options above don't apply. Language is taken from your selected voice.</div>
+      <div class="muted" id="aivideoNote" style="display:none;margin-top:8px">⚠ AI video uses the xAI Grok Imagine API (paid, ~$0.07/s @720p). xAI generates the picture AND the spoken voice from your script — the voice/footage/transition options above don't apply. Language is taken from your selected voice.</div>
+      <div id="aiClipsRow" style="display:none;margin-top:10px">
+        <label>AI clips <span class="muted" style="font-weight:400">(each clip ≤15s — fewer clips = lower cost)</span> <span class="lenval" id="aiClipsLbl">auto</span></label>
+        <input type="range" id="aiClips" min="0" max="8" step="1" value="0">
+        <div class="muted" id="aiClipsHint" style="margin-top:4px">Auto: ~1 clip per 30s. 1 clip ≈ up to 15s, 2 clips ≈ up to 30s.</div>
+      </div>
 
       <div>
         <label>Scene transition</label>
@@ -1051,7 +1056,16 @@ tog('#sw-beat','beat');
 tog('#sw-yt','yt');
 tog('#sw-aivideo','aivideo',on=>{
   $('#aivideoNote').style.display=on?'block':'none';
+  $('#aiClipsRow').style.display=on?'block':'none';
   $('#go').textContent=on?'▶ Generate AI Video (xAI)':'▶ Generate Video';
+});
+// AI clip count (0 = auto). Estimate runtime + 720p cost live.
+$('#aiClips').addEventListener('input',e=>{
+  const n=+e.target.value;
+  $('#aiClipsLbl').textContent = n===0 ? 'auto' : (n+(n===1?' clip':' clips'));
+  if(n===0){ $('#aiClipsHint').textContent='Auto: ~1 clip per 30s. 1 clip ≈ up to 15s, 2 clips ≈ up to 30s.'; }
+  else { const sec=Math.min(15,Math.round((+$('#len').value)/n))*n;
+    $('#aiClipsHint').textContent=`≈ ${sec}s of video · ~$${(sec*0.07).toFixed(2)} at 720p`; }
 });
 tog('#sw-cs','cs');
 tog('#sw-bi','bi',on=>{$('#biRow').style.display=on?'block':'none';});
@@ -1094,6 +1108,7 @@ $('#go').addEventListener('click',async ()=>{
       targetSeconds:+$('#len').value, language:(opt&&opt.dataset.lang)||'English',
       subtitles:state.sub, captionSize:state.capSize, captionAnim:state.capAnim,
       fades:state.fade, autoMusic:state.mus && state.musSrc==='auto',
+      clips:+$('#aiClips').value||undefined, // 0/blank → server auto (~1 per 30s)
     };
     if(scriptMode) aiPayload.script=text; else aiPayload.topic=text;
     const ra=await fetch('/api/ai-video',{method:'POST',
