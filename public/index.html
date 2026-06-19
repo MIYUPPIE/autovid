@@ -683,7 +683,10 @@
           <div class="sw on" id="sw-fade"><i></i></div></div>
         <div class="tog" id="ytTog" style="display:none"><span>▶️ Use YouTube footage too <span class="muted">(in addition to stock)</span></span>
           <div class="sw" id="sw-yt"><i></i></div></div>
+        <div class="tog" id="aivideoTog" style="display:none"><span>🎬 AI video <span class="muted">(xAI generates the clips + voice with lip-sync — no stock footage / neural voiceover)</span></span>
+          <div class="sw" id="sw-aivideo"><i></i></div></div>
       </div>
+      <div class="muted" id="aivideoNote" style="display:none;margin-top:8px">⚠ AI video uses the xAI Grok Imagine API (paid, ~$0.07/s). xAI generates the picture AND the spoken voice from your script — the voice/footage/transition options above don't apply. Language is taken from your selected voice.</div>
 
       <div>
         <label>Scene transition</label>
@@ -964,7 +967,7 @@
 const $ = (s)=>document.querySelector(s);
 let VOICES={}, state={mode:'idea',context:'africa',aspect:'16:9',vregion:'native',vregion2:'global',
   sub:true,capSize:'M',capAnim:'none',motion:true,bi:false,mus:false,musSrc:'auto',fade:true,bgMusicPath:null,
-  cs:false,beat:true,transition:'cut',yt:false,multi:[]};
+  cs:false,beat:true,transition:'cut',yt:false,aivideo:false,multi:[]};
 
 // health
 fetch('/api/health').then(r=>r.json()).then(h=>{
@@ -973,6 +976,8 @@ fetch('/api/health').then(r=>r.json()).then(h=>{
     pill('Script', llm.configured!==false)+
     pill('Footage',k.pexels)+pill('Stock',k.pixabay)+pill('Music',k.jamendo)+pill('Native voices',k.yarn);
   if(!k.jamendo) $('#musAutoNote').innerHTML='⚠ Auto-music needs a key configured in .env.';
+  // AI talking-video mode needs an xAI key (Grok Imagine). Reveal its toggle.
+  if(k.xai){ const t=$('#aivideoTog'); if(t) t.style.display=''; }
   // Dub + shorts need transcription (faster-whisper). Reveal when present.
   if(h.features && h.features.dub){ $('#openDub').style.display=''; $('#openShorts').style.display=''; }
   // YouTube footage needs yt-dlp on the server. Reveal the toggle + modal source when present.
@@ -1044,6 +1049,10 @@ tog('#sw-motion','motion');
 tog('#sw-fade','fade');
 tog('#sw-beat','beat');
 tog('#sw-yt','yt');
+tog('#sw-aivideo','aivideo',on=>{
+  $('#aivideoNote').style.display=on?'block':'none';
+  $('#go').textContent=on?'▶ Generate AI Video (xAI)':'▶ Generate Video';
+});
 tog('#sw-cs','cs');
 tog('#sw-bi','bi',on=>{$('#biRow').style.display=on?'block':'none';});
 tog('#sw-mus','mus',on=>{$('#musRow').style.display=on?'block':'none';});
@@ -1074,6 +1083,26 @@ $('#go').addEventListener('click',async ()=>{
   $('#console').innerHTML=''; $('#planBox').innerHTML=''; $('#resultBox').innerHTML='';
   $('#stage').scrollIntoView({behavior:'smooth',block:'nearest'});
   setBar(0,'Submitting…');
+
+  // AI talking-video mode: xAI generates the clips AND the voice. Separate route,
+  // no stock footage / neural voiceover / transitions. Language comes from the
+  // selected voice's data-lang.
+  if(state.aivideo){
+    const opt=$('#voice').selectedOptions[0];
+    const aiPayload={
+      tone:$('#tone').value, context:state.context, aspect:state.aspect,
+      targetSeconds:+$('#len').value, language:(opt&&opt.dataset.lang)||'English',
+      subtitles:state.sub, captionSize:state.capSize, captionAnim:state.capAnim,
+      fades:state.fade, autoMusic:state.mus && state.musSrc==='auto',
+    };
+    if(scriptMode) aiPayload.script=text; else aiPayload.topic=text;
+    const ra=await fetch('/api/ai-video',{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(aiPayload)});
+    const {jobId:aiId,error:aiErr}=await ra.json();
+    if(aiErr){logLine(aiErr,'e');$('#go').disabled=false;return;}
+    stream(aiId);
+    return;
+  }
 
   const useUpload = state.mus && state.musSrc==='upload';
   const payload={tone:$('#tone').value,context:state.context,
@@ -1210,9 +1239,10 @@ function showResult(res){
     });
   }
   if(res.scenes){
+    // Stock renders carry narration+query; AI talking-video carries line+shot.
     $('#planBox').innerHTML='<b>Scene breakdown</b>'+res.scenes.map(s=>
-      `<div class="sc"><b>${s.index}.</b> ${s.narration}
-       <div class="muted">query: ${s.usedQuery||s.query} · ${s.durationSec}s</div></div>`).join('');
+      `<div class="sc"><b>${s.index}.</b> ${s.narration||s.line||''}
+       <div class="muted">${s.shot?('shot: '+s.shot):('query: '+(s.usedQuery||s.query||''))} · ${s.durationSec}s</div></div>`).join('');
   }
 }
 

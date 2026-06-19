@@ -269,8 +269,8 @@ test('queue: defaults to the in-memory backend when no REDIS_URL', () => {
   assert.equal(activeBackend(), 'memory');
 });
 
-test('queue: PROCESSORS exposes exactly the four job kinds the worker dispatches', () => {
-  assert.deepEqual(Object.keys(PROCESSORS).sort(), ['dub', 'project-render', 'render', 'shorts']);
+test('queue: PROCESSORS exposes exactly the job kinds the worker dispatches', () => {
+  assert.deepEqual(Object.keys(PROCESSORS).sort(), ['ai-video', 'dub', 'project-render', 'render', 'shorts']);
   for (const fn of Object.values(PROCESSORS)) assert.equal(typeof fn, 'function');
 });
 
@@ -1484,6 +1484,27 @@ test('http: POST /api/shorts requires a real videoPath', async () => {
     });
     assert.equal(res.status, 400);
     assert.ok((await res.json()).error);
+  });
+});
+
+test('http: POST /api/ai-video requires a topic/script and an xAI key', async () => {
+  await withServer(async (base) => {
+    const prev = config.xaiKey;
+    // No key → 503 (the mode is unavailable), independent of the body.
+    config.xaiKey = '';
+    const noKey = await fetch(`${base}/api/ai-video`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topic: 'x' }),
+    });
+    assert.equal(noKey.status, 503);
+    // With a key but no topic/script → 400. (A real topic would start a paid job,
+    // so we only exercise the validation branch here.)
+    config.xaiKey = 'test-key';
+    const noTopic = await fetch(`${base}/api/ai-video`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ aspect: '9:16' }),
+    });
+    assert.equal(noTopic.status, 400);
+    assert.ok((await noTopic.json()).error);
+    config.xaiKey = prev;
   });
 });
 

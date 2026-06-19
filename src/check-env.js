@@ -28,6 +28,7 @@ console.log(`  ${config.pexelsKey ? '✓' : '✗'} PEXELS_API_KEY`);
 console.log(`  ${config.pixabayKey ? '✓' : '✗'} PIXABAY_API_KEY`);
 console.log(`  ${config.jamendoClientId ? '✓' : '✗'} JAMENDO_CLIENT_ID  (auto background music)`);
 console.log(`  ${config.yarnKey ? '✓' : '✗'} YARN_API_KEY  (Yoruba/Igbo/Hausa voices)`);
+console.log(`  ${config.xaiKey ? '✓' : '✗'} XAI_API_KEY  → AI talking video (${config.xaiVideoModel} @ ${config.xaiVideoBase}${config.xaiVideoPath}, ${config.xaiVideoResolution})`);
 
 console.log('\nJob queue:');
 if (!config.redisUrl) {

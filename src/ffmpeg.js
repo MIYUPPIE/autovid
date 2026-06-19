@@ -444,3 +444,100 @@ export async function finalizeVideo({
   await ffmpeg(args, 'finalizeVideo');
   return out;
 }
+
+// --- AI talking-video mode (xAI Grok Imagine) ---
+// These clips arrive WITH audio (xAI-generated speech + lip-sync), so unlike the
+// stock pipeline we must never strip or re-time the audio (that would break the
+// lip-sync). We only fit the frame and re-encode uniformly so a plain concat is
+// seamless.
+
+/**
+ * Fit a generated talking clip to the target frame/aspect, KEEPING its audio and
+ * exact timing. No looping, no Ken Burns, no `-an` — the speech and lip-sync must
+ * stay untouched. Returns the normalized path.
+ */
+export async function normalizeAvClip({ input, outBase, aspect, fps = 30 }) {
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['9:16'];
+  const out = path.join(config.dirs.work, `${outBase}_av.mp4`);
+  const vf = `scale=${w}:${h}:force_original_aspect_ratio=increase,crop=${w}:${h},setsar=1,fps=${fps},format=yuv420p`;
+  await ffmpeg(['-i', input, '-vf', vf, ...(await videoCodecArgs()),
+    '-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-ac', '2', '-pix_fmt', 'yuv420p', out], 'normalizeAvClip');
+  return out;
+}
+
+/**
+ * Concatenate talking clips that already carry audio. Stream-copy when the
+ * uniform encodes allow it (fast); falls back to a re-encode. Returns the
+ * combined AV file (still needs captions/music/fades in finalizeTalkingVideo).
+ */
+export async function concatAv({ files, outBase }) {
+  const listPath = path.join(config.dirs.work, `${outBase}_avlist.txt`);
+  fs.writeFileSync(listPath, files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'));
+  const out = path.join(config.dirs.work, `${outBase}_av_concat.mp4`);
+  try {
+    await ffmpeg(['-f', 'concat', '-safe', '0', '-i', listPath, '-c', 'copy', '-movflags', '+faststart', out], 'concatAv(copy)');
+  } catch {
+    await ffmpeg(['-f', 'concat', '-safe', '0', '-i', listPath, ...(await videoCodecArgs()),
+      '-c:a', 'aac', '-b:a', '160k', '-ar', '44100', '-ac', '2', '-pix_fmt', 'yuv420p', out], 'concatAv(reencode)');
+  }
+  return out;
+}
+
+/**
+ * Final pass for talking video: the audio is ALREADY in `avVideo` (the generated
+ * speech). Optionally burn captions, duck a background-music bed under the speech,
+ * add fades, and overlay the brand logo. Mirrors finalizeVideo but maps `[0:a]`
+ * (the clip's own audio) instead of a separate voice track. Returns final mp4.
+ */
+export async function finalizeTalkingVideo({
+  avVideo, captions = null, bgMusic = null, musicVolume = 0.07,
+  aspect, fades = true, outName, logo = null, logoPosition = 'br', logoScale = 0.12,
+}) {
+  const { w, h } = RESOLUTIONS[aspect] || RESOLUTIONS['9:16'];
+  const out = path.join(config.dirs.output, outName);
+  const dur = await probeDuration(avVideo);
+
+  const inputs = ['-i', avVideo];
+  const vChain = [];
+  if (captions && fs.existsSync(captions)) vChain.push(captionFilter(captions, h));
+  if (fades) {
+    vChain.push('fade=t=in:st=0:d=0.5', `fade=t=out:st=${Math.max(0, dur - 0.5).toFixed(2)}:d=0.5`);
+  }
+
+  const parts = [];
+  const hasLogo = logo && fs.existsSync(logo);
+  const baseLabel = hasLogo ? '[vbase]' : '[vout]';
+  parts.push(`[0:v]${vChain.length ? vChain.join(',') : 'copy'}${baseLabel}`);
+
+  let aMap = '[0:a]';
+  if (bgMusic && fs.existsSync(bgMusic)) {
+    inputs.push('-stream_loop', '-1', '-i', bgMusic);
+    parts.push(`[1:a]volume=${musicVolume}[bg]`);
+    parts.push('[0:a]asplit=2[vc][sc]');
+    parts.push('[bg][sc]sidechaincompress=threshold=0.03:ratio=12:attack=20:release=400[bgduck]');
+    parts.push('[vc][bgduck]amix=inputs=2:duration=first:dropout_transition=0[amix]');
+    aMap = '[amix]';
+  }
+  if (fades) {
+    parts.push(`${aMap}afade=t=in:st=0:d=0.4,afade=t=out:st=${Math.max(0, dur - 0.4).toFixed(2)}:d=0.4[aout]`);
+    aMap = '[aout]';
+  }
+
+  if (hasLogo) {
+    const logoIdx = (bgMusic && fs.existsSync(bgMusic)) ? 2 : 1;
+    inputs.push('-i', logo);
+    const scale = Math.max(0.04, Math.min(0.4, Number(logoScale) || 0.12));
+    const lw = Math.round(w * scale);
+    const margin = Math.round(w * 0.03);
+    parts.push(`[${logoIdx}:v]scale=${lw}:-1[lg]`);
+    parts.push(`[vbase][lg]overlay=${logoOverlayXY(logoPosition, margin)}[vout]`);
+  }
+
+  const args = [...inputs, '-filter_complex', parts.join(';'),
+    '-map', '[vout]', '-map', aMap, '-t', dur.toFixed(3),
+    ...(await videoCodecArgs()),
+    '-c:a', 'aac', '-b:a', '160k', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', out];
+
+  await ffmpeg(args, 'finalizeTalkingVideo');
+  return out;
+}
